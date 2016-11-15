@@ -396,6 +396,10 @@ typedef struct RVALUE {
 	    VALUE flags;		/* always 0 for freed obj */
 	    struct RVALUE *next;
 	} free;
+	struct {
+	    VALUE flags;		/* always 0 for freed obj */
+	    VALUE destination;
+	} moved;
 	struct RBasic  basic;
 	struct RObject object;
 	struct RClass  klass;
@@ -2231,6 +2235,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	break;
       case T_RATIONAL:
       case T_COMPLEX:
+      case T_MOVED:
 	break;
       case T_ICLASS:
 	/* Basically , T_ICLASS shares table with the module */
@@ -6629,6 +6634,133 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
     return Qnil;
 }
 
+static int
+gc_is_moveable_obj(VALUE obj, const VALUE *start, register long n)
+{
+    size_t i;
+    if (obj >= *start && obj <= ((*start) + n)) {
+	return FALSE;
+    }
+    return TRUE;
+}
+
+static void
+gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
+{
+    RVALUE *dest = (RVALUE *)free;
+    RVALUE *src = (RVALUE *)scan;
+
+    CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
+
+    memcpy(dest, src, sizeof(RVALUE));
+    memset(src, 0, sizeof(RVALUE));
+
+    gc_mark_set(objspace, (VALUE)dest);
+    src->as.moved.flags = T_MOVED;
+    src->as.moved.destination = scan;
+    printf("%d %d marked: %d %d\n", T_MOVED, BUILTIN_TYPE((VALUE)free), rb_objspace_marked_object_p((VALUE)dest), rb_objspace_marked_object_p((VALUE)(src)));
+}
+
+static void
+gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE *start, const VALUE *end)
+{
+    short found = 0;
+    VALUE v;
+
+    v = (VALUE)pstart;
+    for(; v != (VALUE)pend; v += sizeof(RVALUE)) {
+	int type = BUILTIN_TYPE(v);
+	if (type != T_ZOMBIE && type != T_NONE) {
+	    if (type == T_MOVED) {
+		if (RVALUE_WB_UNPROTECTED(v)) {
+		    printf("moved loc: %p movable: %d marked: %d\n", v, 0, rb_objspace_marked_object_p(v));
+		} else {
+		    printf("moved loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, end - start), rb_objspace_marked_object_p(v));
+		}
+	    } else {
+		if (RVALUE_WB_UNPROTECTED(v)) {
+		    printf("loc: %p movable: %d marked: %d\n", v, 0, rb_objspace_marked_object_p(v));
+		} else {
+		    printf("loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, end - start), rb_objspace_marked_object_p(v));
+		}
+	    }
+	} else {
+	    printf("loc: %p none marked: %d\n", v, rb_objspace_marked_object_p(v));
+	}
+    }
+
+    printf("total: %d, free: %d, found: %d\n", page->total_slots, page->free_slots, found);
+}
+
+static void
+gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *start, const VALUE *end)
+{
+    RVALUE *pstart = NULL, *pend;
+    RVALUE *free = NULL, *scan;
+
+    pstart = page->start;
+    pend = pstart + page->total_slots;
+
+    gc_print_page(page->start, pstart + page->total_slots, page, start, end);
+
+    free = page->start;
+    scan = free + page->total_slots - 1;
+
+    while (free < scan) {
+	while(rb_objspace_marked_object_p(free))
+	    free++;
+
+	while(!rb_objspace_marked_object_p(scan) && scan > free)
+	    scan--;
+
+	if (scan > free) {
+	    gc_move(objspace, scan, free);
+	    printf("-> %d %d marked: %d\n", T_MOVED, BUILTIN_TYPE(free), rb_objspace_marked_object_p((VALUE)scan));
+	    free++;
+	    scan--;
+	}
+    }
+
+    gc_print_page(page->start, pstart + page->total_slots, page, start, end);
+
+}
+
+static VALUE
+gc_compact(void)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    rb_thread_t *th;
+    VALUE *stack_start, *stack_end;
+    union {
+	rb_jmp_buf j;
+	VALUE v[sizeof(rb_jmp_buf) / sizeof(VALUE)];
+    } save_regs_gc_mark;
+
+    th = GET_THREAD();
+
+    if (is_lazy_sweeping(heap_eden))
+	gc_rest(objspace);
+
+    if (is_incremental_marking(objspace)) {
+	gc_marks_rest(objspace);
+    } else {
+	gc_marks(objspace, TRUE);
+    }
+
+    FLUSH_REGISTER_WINDOWS;
+    /* This assumes that all registers are saved into the jmp_buf (and stack) */
+    rb_setjmp(save_regs_gc_mark.j);
+
+    SET_STACK_END;
+    GET_STACK_BOUNDS(stack_start, stack_end, 0);
+
+    printf("start: %p, n: %ld\n", save_regs_gc_mark.v, numberof(save_regs_gc_mark.v));
+
+    gc_compact_page(objspace, heap_pages_sorted[1], stack_start, stack_end);
+
+    return Qnil;
+}
+
 VALUE
 rb_gc_start(void)
 {
@@ -9528,6 +9660,7 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "count", gc_count, 0);
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
+    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 0);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
     gc_constants = rb_hash_new();
