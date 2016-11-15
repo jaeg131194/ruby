@@ -6661,7 +6661,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 }
 
 static void
-gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE *start, const VALUE *end)
+gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE *start, long n)
 {
     short found = 0;
     VALUE v;
@@ -6674,13 +6674,13 @@ gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE 
 		if (RVALUE_WB_UNPROTECTED(v)) {
 		    printf("moved loc: %p movable: %d marked: %d\n", v, 0, rb_objspace_marked_object_p(v));
 		} else {
-		    printf("moved loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, end - start), rb_objspace_marked_object_p(v));
+		    printf("moved loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, n), rb_objspace_marked_object_p(v));
 		}
 	    } else {
 		if (RVALUE_WB_UNPROTECTED(v)) {
 		    printf("loc: %p movable: %d marked: %d\n", v, 0, rb_objspace_marked_object_p(v));
 		} else {
-		    printf("loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, end - start), rb_objspace_marked_object_p(v));
+		    printf("loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, n), rb_objspace_marked_object_p(v));
 		}
 	    }
 	} else {
@@ -6692,7 +6692,7 @@ gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE 
 }
 
 static void
-gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *start, const VALUE *end)
+gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *start, long n)
 {
     RVALUE *pstart = NULL, *pend;
     RVALUE *free = NULL, *scan;
@@ -6700,7 +6700,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *st
     pstart = page->start;
     pend = pstart + page->total_slots;
 
-    gc_print_page(page->start, pstart + page->total_slots, page, start, end);
+    gc_print_page(page->start, pstart + page->total_slots, page, start, n);
 
     free = page->start;
     scan = free + page->total_slots - 1;
@@ -6719,7 +6719,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *st
 	}
     }
 
-    gc_print_page(page->start, pstart + page->total_slots, page, start, end);
+    gc_print_page(page->start, pstart + page->total_slots, page, start, n);
 
 }
 
@@ -6754,7 +6754,7 @@ gc_compact(VALUE mod, VALUE obj)
 
     printf("start: %p, n: %ld\n", save_regs_gc_mark.v, numberof(save_regs_gc_mark.v));
 
-    gc_compact_page(objspace, GET_HEAP_PAGE(obj), stack_start, stack_end);
+    gc_compact_page(objspace, GET_HEAP_PAGE(obj), stack_start, stack_end - stack_start);
     // gc_update_references(objspace, heap_pages_sorted[1], stack_start, stack_end);
 
     return Qnil;
