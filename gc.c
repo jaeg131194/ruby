@@ -6657,8 +6657,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     gc_mark_set(objspace, (VALUE)dest);
     src->as.moved.flags = T_MOVED;
-    src->as.moved.destination = scan;
-    printf("%d %d marked: %d %d\n", T_MOVED, BUILTIN_TYPE((VALUE)free), rb_objspace_marked_object_p((VALUE)dest), rb_objspace_marked_object_p((VALUE)(src)));
+    src->as.moved.destination = (VALUE)dest;
 }
 
 static void
@@ -6715,7 +6714,6 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *st
 
 	if (scan > free) {
 	    gc_move(objspace, scan, free);
-	    printf("-> %d %d marked: %d\n", T_MOVED, BUILTIN_TYPE(free), rb_objspace_marked_object_p((VALUE)scan));
 	    free++;
 	    scan--;
 	}
@@ -6726,7 +6724,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *st
 }
 
 static VALUE
-gc_compact(void)
+gc_compact(VALUE mod, VALUE obj)
 {
     rb_objspace_t *objspace = &rb_objspace;
     rb_thread_t *th;
@@ -6756,7 +6754,8 @@ gc_compact(void)
 
     printf("start: %p, n: %ld\n", save_regs_gc_mark.v, numberof(save_regs_gc_mark.v));
 
-    gc_compact_page(objspace, heap_pages_sorted[1], stack_start, stack_end);
+    gc_compact_page(objspace, GET_HEAP_PAGE(obj), stack_start, stack_end);
+    // gc_update_references(objspace, heap_pages_sorted[1], stack_start, stack_end);
 
     return Qnil;
 }
@@ -9660,7 +9659,7 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "count", gc_count, 0);
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
-    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 0);
+    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 1);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
     gc_constants = rb_hash_new();
