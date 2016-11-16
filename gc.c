@@ -208,7 +208,7 @@ static ruby_gc_params_t gc_params = {
  *  enable to embed GC debugging information.
  */
 #ifndef GC_DEBUG
-#define GC_DEBUG 0
+#define GC_DEBUG 1
 #endif
 
 #if USE_RGENGC
@@ -5597,6 +5597,21 @@ gc_marks_continue(rb_objspace_t *objspace, rb_heap_t *heap)
 #endif
 
 static void
+gc_marks2(rb_objspace_t *objspace, int full_mark)
+{
+    gc_prof_mark_timer_start(objspace);
+
+    PUSH_MARK_FUNC_DATA(NULL);
+    {
+	/* setup marking */
+
+	gc_marks_start(objspace, full_mark);
+    }
+    POP_MARK_FUNC_DATA();
+    gc_prof_mark_timer_stop(objspace);
+}
+
+static void
 gc_marks(rb_objspace_t *objspace, int full_mark)
 {
     gc_prof_mark_timer_start(objspace);
@@ -6635,16 +6650,21 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 }
 
 static int
-gc_is_moveable_obj(VALUE obj, const VALUE *start, register long n)
+gc_is_moveable_obj(VALUE obj)
 {
-    size_t i;
-
-    if (!rb_objspace_marked_object_p(obj))
-	return FALSE;
-
-    if (obj >= *start && obj <= ((*start) + n)) {
+    if(BUILTIN_TYPE(obj) == T_NONE || BUILTIN_TYPE(obj) == T_MOVED) {
 	return FALSE;
     }
+
+    if (RVALUE_WB_UNPROTECTED(obj))
+	return FALSE;
+
+    if (rb_objspace_marked_object_p(obj))
+	return FALSE;
+
+    if (!is_markable_object(NULL, obj))
+	return FALSE;
+
     return TRUE;
 }
 
@@ -6659,13 +6679,14 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
-    gc_mark_set(objspace, (VALUE)dest);
+    CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
+
     src->as.moved.flags = T_MOVED;
     src->as.moved.destination = (VALUE)dest;
 }
 
 static void
-gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE *start, long n)
+gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page)
 {
     short found = 0;
     VALUE v;
@@ -6675,45 +6696,42 @@ gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page, const VALUE 
 	int type = BUILTIN_TYPE(v);
 	if (type != T_ZOMBIE && type != T_NONE) {
 	    if (type == T_MOVED) {
-		if (RVALUE_WB_UNPROTECTED(v)) {
-		    printf("moved loc: %p movable: %d marked: %d\n", v, 0, rb_objspace_marked_object_p(v));
-		} else {
-		    printf("moved loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, n), rb_objspace_marked_object_p(v));
-		}
+		assert(!rb_objspace_marked_object_p(v));
+		printf("➡️ ");
 	    } else {
-		if (RVALUE_WB_UNPROTECTED(v)) {
-		    printf("loc: %p movable: %d marked: %d\n", v, 0, rb_objspace_marked_object_p(v));
+		if (gc_is_moveable_obj(v)) {
+		    printf("🙆 ");
 		} else {
-		    printf("loc: %p movable: %d marked: %d\n", v, gc_is_moveable_obj(v, start, n), rb_objspace_marked_object_p(v));
+		    printf("🙅‍♂️ ");
 		}
 	    }
 	} else {
-	    printf("loc: %p none marked: %d\n", v, rb_objspace_marked_object_p(v));
+	    printf("🆓 ");
 	}
     }
+    printf("\n");
 
     printf("total: %d, free: %d, found: %d\n", page->total_slots, page->free_slots, found);
 }
 
 static void
-gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *start, long n)
+gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 {
-    RVALUE *pstart = NULL, *pend;
+    RVALUE *pstart = NULL;
     RVALUE *free = NULL, *scan;
 
     pstart = page->start;
-    pend = pstart + page->total_slots;
 
-    gc_print_page(page->start, pstart + page->total_slots, page, start, n);
+    gc_print_page(page->start, pstart + page->total_slots, page);
 
     free = page->start;
     scan = free + page->total_slots - 1;
 
     while (free < scan) {
-	while(rb_objspace_marked_object_p(free) && BUILTIN_TYPE(free) != T_NONE)
+	while(BUILTIN_TYPE(free) != T_NONE)
 	    free++;
 
-	while(!gc_is_moveable_obj(scan, start, n) && scan > free)
+	while(!gc_is_moveable_obj(scan) && scan > free)
 	    scan--;
 
 	if (scan > free) {
@@ -6723,43 +6741,86 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page, const VALUE *st
 	}
     }
 
-    gc_print_page(page->start, pstart + page->total_slots, page, start, n);
+    gc_print_page(page->start, pstart + page->total_slots, page);
 
 }
 
+static void
+gc_ref_update_array(VALUE v)
+{
+    long i, len;
+
+    if (FL_TEST(v, ELTS_SHARED))
+	return;
+
+    len = RARRAY_LEN(v);
+    if (len > 0) {
+	VALUE *ptr = RARRAY_CONST_PTR(v);
+	for(i = 0; i < len; i++) {
+	    if (is_markable_object(NULL, ptr[i])) {
+		if(ptr[i] && BUILTIN_TYPE(ptr[i]) == T_MOVED) {
+		    ptr[i] = (VALUE)(((RVALUE *)ptr[i])->as.moved.destination);
+		}
+	    }
+	}
+    }
+}
+
+static int
+gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
+{
+    VALUE v = (VALUE)vstart;
+    for(; v != (VALUE)vend; v += stride) {
+	switch(BUILTIN_TYPE(v)) {
+	    case T_NONE:
+		break;
+	    case T_MOVED:
+		break;
+	    case T_ARRAY:
+		gc_ref_update_array(v);
+		break;
+	    default:
+		break;
+	}
+    }
+    return 0;
+}
+
+static void
+gc_update_references(void)
+{
+    rb_objspace_each_objects_without_setup(gc_ref_update, NULL);
+}
+
 static VALUE
-gc_compact(VALUE mod, VALUE obj)
+gc_compact(VALUE mod, VALUE obj, VALUE ary)
 {
     rb_objspace_t *objspace = &rb_objspace;
-    rb_thread_t *th;
-    VALUE *stack_start, *stack_end;
-    union {
-	rb_jmp_buf j;
-	VALUE v[sizeof(rb_jmp_buf) / sizeof(VALUE)];
-    } save_regs_gc_mark;
+    struct heap_page *page;
 
-    th = GET_THREAD();
+    gc_start(objspace, TRUE, TRUE, TRUE, GPR_FLAG_CAPI);
 
-    if (is_lazy_sweeping(heap_eden))
-	gc_rest(objspace);
+    /* should only mark roots */
+    gc_marks2(objspace, FALSE);
 
-    if (is_incremental_marking(objspace)) {
-	gc_marks_rest(objspace);
-    } else {
-	gc_marks(objspace, TRUE);
-    }
+    // rb_gcdebug_print_obj_condition(ary);
+    // rb_gcdebug_print_obj_condition(obj);
+    // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 2));
 
-    FLUSH_REGISTER_WINDOWS;
-    /* This assumes that all registers are saved into the jmp_buf (and stack) */
-    rb_setjmp(save_regs_gc_mark.j);
+    page = GET_HEAP_PAGE(rb_ary_entry(ary, 20));
 
-    SET_STACK_END;
-    GET_STACK_BOUNDS(stack_start, stack_end, 0);
-
-    printf("start: %p, n: %ld\n", save_regs_gc_mark.v, numberof(save_regs_gc_mark.v));
-
-    gc_compact_page(objspace, GET_HEAP_PAGE(obj), stack_start, stack_end - stack_start);
-    // gc_update_references(objspace, heap_pages_sorted[1], stack_start, stack_end);
+    printf("heap pages: %p %p\n", GET_HEAP_PAGE(obj), page);
+    gc_compact_page(objspace, page);
+    gc_update_references();
+    // gc_ref_update_array(ary);
+    // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
+    // gc_ref_update_array(ary);
+    /*
+    printf("len: %d %d\n", BUILTIN_TYPE(ary), T_MOVED);
+    printf("blah: %d %d %d\n", BUILTIN_TYPE(rb_ary_entry(ary, 1)),
+	    BUILTIN_TYPE(rb_ary_entry(ary, 2)), T_MOVED);
+    gc_ref_update_array(ary);
+    */
 
     return Qnil;
 }
@@ -9511,6 +9572,11 @@ rb_gcdebug_print_obj_condition(VALUE obj)
 
     fprintf(stderr, "created at: %s:%d\n", RANY(obj)->file, RANY(obj)->line);
 
+    if (BUILTIN_TYPE(obj) == T_MOVED) {
+        fprintf(stderr, "moved?: true\n");
+    } else {
+        fprintf(stderr, "moved?: false\n");
+    }
     if (is_pointer_to_heap(objspace, (void *)obj)) {
         fprintf(stderr, "pointer to heap?: true\n");
     }
@@ -9663,7 +9729,7 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "count", gc_count, 0);
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
-    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 1);
+    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 2);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
     gc_constants = rb_hash_new();
