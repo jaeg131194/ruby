@@ -6650,7 +6650,7 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 }
 
 static int
-gc_is_moveable_obj(VALUE obj)
+gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 {
     if(BUILTIN_TYPE(obj) == T_NONE || BUILTIN_TYPE(obj) == T_MOVED) {
 	return FALSE;
@@ -6662,7 +6662,7 @@ gc_is_moveable_obj(VALUE obj)
     if (rb_objspace_marked_object_p(obj))
 	return FALSE;
 
-    if (!is_markable_object(NULL, obj))
+    if (!is_markable_object(objspace, obj))
 	return FALSE;
 
     return TRUE;
@@ -6686,7 +6686,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 }
 
 static void
-gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page)
+gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct heap_page *page)
 {
     short found = 0;
     VALUE v;
@@ -6699,7 +6699,7 @@ gc_print_page(RVALUE *pstart, RVALUE *pend, struct heap_page *page)
 		assert(!rb_objspace_marked_object_p(v));
 		printf("➡️ ");
 	    } else {
-		if (gc_is_moveable_obj(v)) {
+		if (gc_is_moveable_obj(objspace, v)) {
 		    printf("🙆 ");
 		} else {
 		    printf("🙅‍♂️ ");
@@ -6722,7 +6722,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 
     pstart = page->start;
 
-    gc_print_page(page->start, pstart + page->total_slots, page);
+    gc_print_page(objspace, page->start, pstart + page->total_slots, page);
 
     free = page->start;
     scan = free + page->total_slots - 1;
@@ -6731,7 +6731,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 	while(BUILTIN_TYPE(free) != T_NONE)
 	    free++;
 
-	while(!gc_is_moveable_obj(scan) && scan > free)
+	while(!gc_is_moveable_obj(objspace, scan) && scan > free)
 	    scan--;
 
 	if (scan > free) {
@@ -6741,12 +6741,12 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 	}
     }
 
-    gc_print_page(page->start, pstart + page->total_slots, page);
+    gc_print_page(objspace, page->start, pstart + page->total_slots, page);
 
 }
 
 static void
-gc_ref_update_array(VALUE v)
+gc_ref_update_array(VALUE v, rb_objspace_t * objspace)
 {
     long i, len;
 
@@ -6757,7 +6757,7 @@ gc_ref_update_array(VALUE v)
     if (len > 0) {
 	VALUE *ptr = RARRAY_CONST_PTR(v);
 	for(i = 0; i < len; i++) {
-	    if (is_markable_object(NULL, ptr[i])) {
+	    if (is_markable_object(objspace, ptr[i])) {
 		if(ptr[i] && BUILTIN_TYPE(ptr[i]) == T_MOVED) {
 		    ptr[i] = (VALUE)(((RVALUE *)ptr[i])->as.moved.destination);
 		}
@@ -6777,7 +6777,7 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 	    case T_MOVED:
 		break;
 	    case T_ARRAY:
-		gc_ref_update_array(v);
+		gc_ref_update_array(v, (rb_objspace_t *)data);
 		break;
 	    default:
 		break;
@@ -6789,7 +6789,7 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 static void
 gc_update_references(void)
 {
-    rb_objspace_each_objects_without_setup(gc_ref_update, NULL);
+    rb_objspace_each_objects_without_setup(gc_ref_update, &rb_objspace);
 }
 
 static VALUE
