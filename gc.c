@@ -6650,14 +6650,11 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 }
 
 static int
-gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
+gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 {
-    if(BUILTIN_TYPE(obj) == T_NONE || BUILTIN_TYPE(obj) == T_MOVED) {
+    if (BUILTIN_TYPE(obj) == T_NONE || BUILTIN_TYPE(obj) == T_MOVED) {
 	return FALSE;
     }
-
-    if (RVALUE_WB_UNPROTECTED(obj))
-	return FALSE;
 
     if (rb_objspace_marked_object_p(obj))
 	return FALSE;
@@ -6665,8 +6662,37 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
     if (!is_markable_object(objspace, obj))
 	return FALSE;
 
+    switch(BUILTIN_TYPE(obj)) {
+	case T_NONE:
+	case T_MOVED:
+	case T_NIL:
+	    return FALSE;
+	    break;
+	case T_OBJECT:
+	case T_ARRAY:
+	case T_BIGNUM:
+	    break;
+	case T_STRING:
+	case T_HASH:
+	case T_DATA:
+	    // FIXME: return false for embedded strings
+	    return FALSE;
+	    break;
+	case T_IMEMO:
+	case T_NODE:
+	    // FIXME: are these OK to move?
+	    return FALSE;
+	    break;
+	default:
+	    if(moving)
+		printf("moving type: %d\n", BUILTIN_TYPE(obj));
+	    break;
+    }
+
     return TRUE;
 }
+
+void rb_obj_info_dump_move(VALUE obj, VALUE newloc);
 
 static void
 gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
@@ -6676,6 +6702,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
 
+    rb_obj_info_dump_move(src, (VALUE)dest);
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
@@ -6699,10 +6726,10 @@ gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct hea
 		assert(!rb_objspace_marked_object_p(v));
 		printf("➡️ ");
 	    } else {
-		if (gc_is_moveable_obj(objspace, v)) {
+		if (gc_is_moveable_obj(objspace, v, 0)) {
 		    printf("🙆 ");
 		} else {
-		    printf("🙅‍♂️ ");
+		    printf("🙅 ");
 		}
 	    }
 	} else {
@@ -6731,7 +6758,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 	while(BUILTIN_TYPE(free) != T_NONE)
 	    free++;
 
-	while(!gc_is_moveable_obj(objspace, scan) && scan > free)
+	while(!gc_is_moveable_obj(objspace, scan, 1) && scan > free)
 	    scan--;
 
 	if (scan > free) {
@@ -6766,10 +6793,85 @@ gc_ref_update_array(VALUE v, rb_objspace_t * objspace)
     }
 }
 
+struct update_debug {
+    rb_objspace_t * objspace;
+    st_table * ht;
+    VALUE obj;
+};
+
+struct replace_arg {
+    VALUE new_key;
+    VALUE old_key;
+    VALUE new_value;
+    VALUE old_value;
+};
+
+static int
+hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, int existing)
+{
+    rb_objspace_t *objspace;
+
+    objspace = args->objspace;
+
+    if(is_pointer_to_heap(objspace, *key) && BUILTIN_TYPE(*key) == T_MOVED) {
+	*key = (VALUE)(((RVALUE *)*key)->as.moved.destination);
+    }
+    if(is_pointer_to_heap(objspace, *value) && BUILTIN_TYPE(*value) == T_MOVED) {
+	*value = (VALUE)(((RVALUE *)*value)->as.moved.destination);
+    }
+
+    printf("MOVED!!\n");
+    return ST_CONTINUE;
+}
+
+static int
+hash_foreach_replace(st_data_t key, st_data_t value, st_data_t argp, int error)
+{
+    struct update_debug * data;
+    rb_objspace_t *objspace;
+
+    data = (struct update_debug *)argp;
+    objspace = data->objspace;
+
+    if(is_pointer_to_heap(objspace, key) && BUILTIN_TYPE(key) == T_MOVED) {
+	printf("found moved key!\n");
+	return ST_REPLACE;
+    }
+
+    if(is_pointer_to_heap(objspace, value) && BUILTIN_TYPE(value) == T_MOVED) {
+	printf("found moved value!\n");
+	return ST_REPLACE;
+    }
+    return ST_CHECK;
+}
+
+static void
+gc_ref_update_hash(VALUE v, rb_objspace_t * objspace, struct update_debug *data)
+{
+    st_table * ht;
+
+    if (FL_TEST(v, ELTS_SHARED))
+	return;
+
+    ht = rb_hash_tbl_raw(v);
+    data->ht = ht;
+    if (v == data->obj) {
+    if (st_foreach_with_replace(ht, hash_foreach_replace, hash_replace_ref, (st_data_t)data)) {
+	rb_raise(rb_eRuntimeError, "hash modified during iteration");
+    }
+    }
+}
+
 static int
 gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 {
+    rb_objspace_t * objspace;
+
+    VALUE target;
     VALUE v = (VALUE)vstart;
+    objspace = ((struct update_debug *)data)->objspace;
+    target = ((struct update_debug *)data)->obj;
+
     for(; v != (VALUE)vend; v += stride) {
 	switch(BUILTIN_TYPE(v)) {
 	    case T_NONE:
@@ -6777,7 +6879,14 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 	    case T_MOVED:
 		break;
 	    case T_ARRAY:
-		gc_ref_update_array(v, (rb_objspace_t *)data);
+		gc_ref_update_array(v, objspace);
+		break;
+	    case T_HASH:
+		if (v == target) {
+		    gc_ref_update_hash(v, objspace, (struct update_debug *)data);
+		} else {
+		    gc_ref_update_hash(v, objspace, (struct update_debug *)data);
+		}
 		break;
 	    default:
 		break;
@@ -6787,9 +6896,13 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 }
 
 static void
-gc_update_references(void)
+gc_update_references(VALUE obj)
 {
-    rb_objspace_each_objects_without_setup(gc_ref_update, &rb_objspace);
+    struct update_debug blah;
+    blah.objspace = &rb_objspace;
+    blah.obj = obj;
+
+    rb_objspace_each_objects_without_setup(gc_ref_update, &blah);
 }
 
 static VALUE
@@ -6798,20 +6911,25 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     rb_objspace_t *objspace = &rb_objspace;
     struct heap_page *page;
 
-    gc_start(objspace, TRUE, TRUE, TRUE, GPR_FLAG_CAPI);
+    printf("major: %d\n", objspace->profile.major_gc_count);
 
+    rb_gc();
+    printf("major: %d\n", objspace->profile.major_gc_count);
+
+    printf("incmark: %d\n", is_incremental_marking(objspace));
+    printf("incsweep: %d\n", is_lazy_sweeping(heap_eden));
     /* should only mark roots */
+    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
     gc_marks2(objspace, FALSE);
 
-    // rb_gcdebug_print_obj_condition(ary);
-    // rb_gcdebug_print_obj_condition(obj);
-    // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 2));
+    rb_gcdebug_print_obj_condition(ary);
+    rb_gcdebug_print_obj_condition(obj);
 
-    page = GET_HEAP_PAGE(rb_ary_entry(ary, 20));
+    page = GET_HEAP_PAGE(obj);
 
-    printf("heap pages: %p %p\n", GET_HEAP_PAGE(obj), page);
+    printf("heap pages: %p %p\n", GET_HEAP_PAGE(ary), page);
     gc_compact_page(objspace, page);
-    gc_update_references();
+    gc_update_references(ary);
     // gc_ref_update_array(ary);
     // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
     // gc_ref_update_array(ary);
@@ -9561,6 +9679,13 @@ rb_obj_info_dump(VALUE obj)
 {
     char buff[0x100];
     fprintf(stderr, "rb_obj_info_dump: %s\n", rb_raw_obj_info(buff, 0x100, obj));
+}
+
+void
+rb_obj_info_dump_move(VALUE obj, VALUE newloc)
+{
+    char buff[0x100];
+    fprintf(stderr, "rb_obj_info_dump: %s -> %p\n", rb_raw_obj_info(buff, 0x100, obj), newloc);
 }
 
 #if GC_DEBUG
