@@ -849,6 +849,11 @@ enum ruby_fl_type {
     RUBY_FL_SINGLETON = RUBY_FL_USER0
 };
 
+struct RMoved {
+    VALUE flags;
+    VALUE destination;
+};
+
 struct RBasic {
     VALUE flags;
     const VALUE klass;
@@ -1199,6 +1204,7 @@ int rb_big_sign(VALUE);
 #define RBIGNUM_NEGATIVE_P(b) (RBIGNUM_SIGN(b)==0)
 
 #define R_CAST(st)   (struct st*)
+#define RMOVED(obj)  (R_CAST(RMoved)(obj))
 #define RBASIC(obj)  (R_CAST(RBasic)(obj))
 #define ROBJECT(obj) (R_CAST(RObject)(obj))
 #define RCLASS(obj)  (R_CAST(RClass)(obj))

@@ -396,10 +396,7 @@ typedef struct RVALUE {
 	    VALUE flags;		/* always 0 for freed obj */
 	    struct RVALUE *next;
 	} free;
-	struct {
-	    VALUE flags;		/* always 0 for freed obj */
-	    VALUE destination;
-	} moved;
+	struct RMoved  moved;
 	struct RBasic  basic;
 	struct RObject object;
 	struct RClass  klass;
@@ -6703,7 +6700,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
 
-    rb_obj_info_dump_move(src, (VALUE)dest);
+    // rb_obj_info_dump_move(src, (VALUE)dest);
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
@@ -6787,7 +6784,7 @@ gc_ref_update_array(VALUE v, rb_objspace_t * objspace)
 	for(i = 0; i < len; i++) {
 	    if (is_markable_object(objspace, ptr[i])) {
 		if(ptr[i] && BUILTIN_TYPE(ptr[i]) == T_MOVED) {
-		    ptr[i] = (VALUE)(((RVALUE *)ptr[i])->as.moved.destination);
+		    ptr[i] = (VALUE)RMOVED(ptr[i])->destination;
 		}
 	    }
 	}
@@ -6801,7 +6798,7 @@ gc_ref_update_object(VALUE v, rb_objspace_t * objspace)
     VALUE *ptr = ROBJECT_IVPTR(v);
     for (i  = 0; i < len; i++) {
 	if (is_markable_object(objspace, ptr[i]) && BUILTIN_TYPE(ptr[i]) == T_MOVED) {
-	    ptr[i] = (VALUE)(((RVALUE *)ptr[i])->as.moved.destination);
+	    ptr[i] = (VALUE)RMOVED(ptr[i])->destination;
 	}
     }
 }
@@ -6812,13 +6809,6 @@ struct update_debug {
     VALUE obj;
 };
 
-struct replace_arg {
-    VALUE new_key;
-    VALUE old_key;
-    VALUE new_value;
-    VALUE old_value;
-};
-
 static int
 hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, int existing)
 {
@@ -6827,10 +6817,10 @@ hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, in
     objspace = args->objspace;
 
     if(is_pointer_to_heap(objspace, *key) && BUILTIN_TYPE(*key) == T_MOVED) {
-	*key = (VALUE)(((RVALUE *)*key)->as.moved.destination);
+	*key = (VALUE)RMOVED(*key)->destination;
     }
     if(is_pointer_to_heap(objspace, *value) && BUILTIN_TYPE(*value) == T_MOVED) {
-	*value = (VALUE)(((RVALUE *)*value)->as.moved.destination);
+	*value = (VALUE)RMOVED(*value)->destination;
     }
 
     printf("MOVED!!\n");
@@ -6840,26 +6830,22 @@ hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, in
 static int
 hash_foreach_replace(st_data_t key, st_data_t value, st_data_t argp, int error)
 {
-    struct update_debug * data;
     rb_objspace_t *objspace;
 
-    data = (struct update_debug *)argp;
-    objspace = data->objspace;
+    objspace = (rb_objspace_t *)argp;
 
     if(is_pointer_to_heap(objspace, key) && BUILTIN_TYPE(key) == T_MOVED) {
-	printf("found moved key!\n");
 	return ST_REPLACE;
     }
 
     if(is_pointer_to_heap(objspace, value) && BUILTIN_TYPE(value) == T_MOVED) {
-	printf("found moved value!\n");
 	return ST_REPLACE;
     }
     return ST_CHECK;
 }
 
 static void
-gc_ref_update_hash(VALUE v, rb_objspace_t * objspace, struct update_debug *data)
+gc_ref_update_hash(VALUE v, rb_objspace_t * objspace)
 {
     st_table * ht;
 
@@ -6867,45 +6853,58 @@ gc_ref_update_hash(VALUE v, rb_objspace_t * objspace, struct update_debug *data)
 	return;
 
     ht = rb_hash_tbl_raw(v);
-    data->ht = ht;
-    if (v == data->obj) {
-    if (st_foreach_with_replace(ht, hash_foreach_replace, hash_replace_ref, (st_data_t)data)) {
+    if (st_foreach_with_replace(ht, hash_foreach_replace, hash_replace_ref, (st_data_t)objspace)) {
 	rb_raise(rb_eRuntimeError, "hash modified during iteration");
-    }
     }
 }
 
+static void
+gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
+{
+    RVALUE *any = RANY(obj);
+
+    if (!is_markable_object(objspace, obj))
+	return;
+
+    if (FL_TEST(obj, FL_EXIVAR)) {
+	rb_move_generic_ivar(obj);
+    }
+
+    switch(BUILTIN_TYPE(obj)) {
+	case T_NIL:
+	case T_FIXNUM:
+	case T_MOVED:
+	case T_NONE:
+	    /* These can't move */
+	    return;
+
+	case T_OBJECT:
+	    gc_ref_update_object(obj, objspace);
+	case T_ARRAY:
+	    gc_ref_update_array(obj, objspace);
+	    break;
+	case T_HASH:
+	    gc_ref_update_hash(obj, objspace);
+	    break;
+	default:
+	    printf("hit %d\n", BUILTIN_TYPE(obj));
+	    break;
+    }
+
+    if (is_markable_object(objspace, any->as.basic.klass) && BUILTIN_TYPE(any->as.basic.klass) == T_MOVED) {
+	rb_bug("OMGOMGOMGOMG");
+    }
+}
 static int
 gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 {
     rb_objspace_t * objspace;
 
-    VALUE target;
     VALUE v = (VALUE)vstart;
     objspace = ((struct update_debug *)data)->objspace;
-    target = ((struct update_debug *)data)->obj;
 
     for(; v != (VALUE)vend; v += stride) {
-	switch(BUILTIN_TYPE(v)) {
-	    case T_NONE:
-		break;
-	    case T_MOVED:
-		break;
-	    case T_OBJECT:
-		gc_ref_update_object(v, objspace);
-	    case T_ARRAY:
-		gc_ref_update_array(v, objspace);
-		break;
-	    case T_HASH:
-		if (v == target) {
-		    gc_ref_update_hash(v, objspace, (struct update_debug *)data);
-		} else {
-		    gc_ref_update_hash(v, objspace, (struct update_debug *)data);
-		}
-		break;
-	    default:
-		break;
-	}
+	gc_update_object_references(objspace, v);
     }
     return 0;
 }
@@ -6926,10 +6925,7 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     rb_objspace_t *objspace = &rb_objspace;
     struct heap_page *page;
 
-    printf("major: %d\n", objspace->profile.major_gc_count);
-
     rb_gc();
-    printf("major: %d\n", objspace->profile.major_gc_count);
 
     printf("incmark: %d\n", is_incremental_marking(objspace));
     printf("incsweep: %d\n", is_lazy_sweeping(heap_eden));
@@ -6937,8 +6933,8 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
     gc_marks2(objspace, FALSE);
 
-    rb_gcdebug_print_obj_condition(ary);
-    rb_gcdebug_print_obj_condition(obj);
+    // rb_gcdebug_print_obj_condition(ary);
+    // rb_gcdebug_print_obj_condition(obj);
 
     page = GET_HEAP_PAGE(obj);
 
