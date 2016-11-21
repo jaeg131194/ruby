@@ -6867,7 +6867,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	return;
 
     if (FL_TEST(obj, FL_EXIVAR)) {
-	rb_move_generic_ivar(obj);
+	rb_update_generic_ivar_references(obj);
     }
 
     switch(BUILTIN_TYPE(obj)) {
@@ -6885,6 +6885,9 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 	case T_HASH:
 	    gc_ref_update_hash(obj, objspace);
+	    break;
+	case T_STRING:
+	    /* Don't need to do anything */
 	    break;
 	default:
 	    printf("hit %d\n", BUILTIN_TYPE(obj));

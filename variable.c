@@ -1180,7 +1180,7 @@ rb_mark_generic_ivar(VALUE obj)
 }
 
 void
-rb_move_generic_ivar(VALUE obj)
+rb_update_generic_ivar_references(VALUE obj)
 {
     struct gen_ivtbl *ivtbl;
     uint32_t i;
