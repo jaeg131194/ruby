@@ -6675,6 +6675,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_STRING:
 	case T_HASH:
 	case T_DATA:
+	case T_CLASS:
 	    // FIXME: return false for embedded strings
 	    return FALSE;
 	    break;
@@ -6793,6 +6794,18 @@ gc_ref_update_array(VALUE v, rb_objspace_t * objspace)
     }
 }
 
+static void
+gc_ref_update_object(VALUE v, rb_objspace_t * objspace)
+{
+    uint32_t i, len = ROBJECT_NUMIV(v);
+    VALUE *ptr = ROBJECT_IVPTR(v);
+    for (i  = 0; i < len; i++) {
+	if (is_markable_object(objspace, ptr[i]) && BUILTIN_TYPE(ptr[i]) == T_MOVED) {
+	    ptr[i] = (VALUE)(((RVALUE *)ptr[i])->as.moved.destination);
+	}
+    }
+}
+
 struct update_debug {
     rb_objspace_t * objspace;
     st_table * ht;
@@ -6878,6 +6891,8 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 		break;
 	    case T_MOVED:
 		break;
+	    case T_OBJECT:
+		gc_ref_update_object(v, objspace);
 	    case T_ARRAY:
 		gc_ref_update_array(v, objspace);
 		break;
