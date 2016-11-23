@@ -677,6 +677,8 @@ struct heap_page {
 #if USE_RGENGC
     bits_t wb_unprotected_bits[HEAP_PAGE_BITMAP_LIMIT];
 #endif
+    /* If set, the object is not movable */
+    bits_t pinned_bits[HEAP_PAGE_BITMAP_LIMIT];
     /* the following three bitmaps are cleared at the beginning of full GC */
     bits_t mark_bits[HEAP_PAGE_BITMAP_LIMIT];
 #if USE_RGENGC
@@ -701,6 +703,7 @@ struct heap_page {
 
 /* getting bitmap */
 #define GET_HEAP_MARK_BITS(x)           (&GET_HEAP_PAGE(x)->mark_bits[0])
+#define GET_HEAP_PINNED_BITS(x)         (&GET_HEAP_PAGE(x)->pinned_bits[0])
 #if USE_RGENGC
 #define GET_HEAP_UNCOLLECTIBLE_BITS(x)  (&GET_HEAP_PAGE(x)->uncollectible_bits[0])
 #define GET_HEAP_WB_UNPROTECTED_BITS(x) (&GET_HEAP_PAGE(x)->wb_unprotected_bits[0])
@@ -1012,6 +1015,7 @@ tick(void)
 #define FL_UNSET2(x,f)        do {if (RGENGC_CHECK_MODE && SPECIAL_CONST_P(x)) rb_bug("FL_UNSET2: SPECIAL_CONST"); RBASIC(x)->flags &= ~(f);} while (0)
 
 #define RVALUE_MARK_BITMAP(obj)           MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), (obj))
+#define RVALUE_PIN_BITMAP(obj)            MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), (obj))
 #define RVALUE_PAGE_MARKED(page, obj)     MARKED_IN_BITMAP((page)->mark_bits, (obj))
 
 #if USE_RGENGC
@@ -1110,6 +1114,13 @@ RVALUE_MARKED(VALUE obj)
 {
     check_rvalue_consistency(obj);
     return RVALUE_MARK_BITMAP(obj) != 0;
+}
+
+static inline int
+RVALUE_PINNED(VALUE obj)
+{
+    check_rvalue_consistency(obj);
+    return RVALUE_PIN_BITMAP(obj) != 0;
 }
 
 #if USE_RGENGC
@@ -4393,6 +4404,12 @@ rb_objspace_marked_object_p(VALUE obj)
     return RVALUE_MARKED(obj) ? TRUE : FALSE;
 }
 
+int
+rb_objspace_pinned_object_p(VALUE obj)
+{
+    return RVALUE_PINNED(obj) ? TRUE : FALSE;
+}
+
 static inline void
 gc_mark_set_parent(rb_objspace_t *objspace, VALUE obj)
 {
@@ -5594,21 +5611,6 @@ gc_marks_continue(rb_objspace_t *objspace, rb_heap_t *heap)
 #endif
 
 static void
-gc_marks2(rb_objspace_t *objspace, int full_mark)
-{
-    gc_prof_mark_timer_start(objspace);
-
-    PUSH_MARK_FUNC_DATA(NULL);
-    {
-	/* setup marking */
-
-	gc_marks_start(objspace, full_mark);
-    }
-    POP_MARK_FUNC_DATA();
-    gc_prof_mark_timer_stop(objspace);
-}
-
-static void
 gc_marks(rb_objspace_t *objspace, int full_mark)
 {
     gc_prof_mark_timer_start(objspace);
@@ -5818,6 +5820,7 @@ rgengc_mark_and_rememberset_clear(rb_objspace_t *objspace, rb_heap_t *heap)
 
     while (page) {
 	memset(&page->mark_bits[0],       0, HEAP_PAGE_BITMAP_SIZE);
+	memset(&page->pinned_bits[0],     0, HEAP_PAGE_BITMAP_SIZE);
 	memset(&page->marking_bits[0],    0, HEAP_PAGE_BITMAP_SIZE);
 	memset(&page->uncollectible_bits[0], 0, HEAP_PAGE_BITMAP_SIZE);
 	page->flags.has_uncollectible_shady_objects = FALSE;
@@ -6653,7 +6656,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	return FALSE;
     }
 
-    if (rb_objspace_marked_object_p(obj))
+    if (rb_objspace_pinned_object_p(obj))
 	return FALSE;
 
     if (!is_markable_object(objspace, obj))
@@ -6929,6 +6932,12 @@ gc_update_references(VALUE obj)
     rb_objspace_each_objects_without_setup(gc_ref_update, &blah);
 }
 
+static void
+gc_pin_root(const char *category, VALUE obj, void *data)
+{
+    MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj);
+}
+
 static VALUE
 gc_compact(VALUE mod, VALUE obj, VALUE ary)
 {
@@ -6941,7 +6950,9 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     printf("incsweep: %d\n", is_lazy_sweeping(heap_eden));
     /* should only mark roots */
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
-    gc_marks2(objspace, FALSE);
+
+    /* pin roots */
+    rb_objspace_reachable_objects_from_root(gc_pin_root, NULL);
 
     // rb_gcdebug_print_obj_condition(ary);
     // rb_gcdebug_print_obj_condition(obj);
