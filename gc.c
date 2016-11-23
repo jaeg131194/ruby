@@ -859,6 +859,7 @@ static void gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *heap);
 #endif
 
 static inline void gc_mark(rb_objspace_t *objspace, VALUE ptr);
+static inline void gc_pin(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_maybe(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_children(rb_objspace_t *objspace, VALUE ptr);
@@ -4029,6 +4030,7 @@ static int
 mark_entry(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
+    gc_pin(objspace, (VALUE)value);
     gc_mark(objspace, (VALUE)value);
     return ST_CONTINUE;
 }
@@ -4128,6 +4130,7 @@ mark_method_entry_i(VALUE me, void *data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
 
+    gc_pin(objspace, me);
     gc_mark(objspace, me);
     return ID_TABLE_CONTINUE;
 }
@@ -4146,6 +4149,8 @@ mark_const_entry_i(VALUE value, void *data)
     const rb_const_entry_t *ce = (const rb_const_entry_t *)value;
     rb_objspace_t *objspace = data;
 
+    gc_pin(objspace, ce->value);
+    gc_pin(objspace, ce->file);
     gc_mark(objspace, ce->value);
     gc_mark(objspace, ce->file);
     return ID_TABLE_CONTINUE;
@@ -4379,6 +4384,13 @@ gc_mark_ptr(rb_objspace_t *objspace, VALUE obj)
     else {
 	objspace->mark_func_data->mark_func(obj, objspace->mark_func_data->data);
     }
+}
+
+static inline void
+gc_pin(rb_objspace_t *objspace, VALUE obj)
+{
+    if (!is_markable_object(objspace, obj)) return;
+    MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj);
 }
 
 static inline void
@@ -6703,7 +6715,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
 
-    // rb_obj_info_dump_move(src, (VALUE)dest);
+    rb_obj_info_dump_move(src, (VALUE)dest);
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
@@ -6886,7 +6898,9 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_CLASS:
 	case T_MODULE:
-	    gc_update_table_refs(objspace, RCLASS_M_TBL(obj));
+	    if (!RCLASS_EXT(obj)) break;
+	    // rb_obj_info_dump(RCLASS_SUPER(obj));
+	    break;
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
@@ -6900,7 +6914,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    /* Don't need to do anything */
 	    break;
 	default:
-	    printf("hit %d\n", BUILTIN_TYPE(obj));
+	    // rb_obj_info_dump(obj);
 	    break;
     }
 
@@ -6935,7 +6949,7 @@ gc_update_references(VALUE obj)
 static void
 gc_pin_root(const char *category, VALUE obj, void *data)
 {
-    MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj);
+    gc_pin((rb_objspace_t *)data, obj);
 }
 
 static VALUE
@@ -6952,7 +6966,8 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
     /* pin roots */
-    rb_objspace_reachable_objects_from_root(gc_pin_root, NULL);
+    gc_marks_start(objspace, TRUE);
+    rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
 
     // rb_gcdebug_print_obj_condition(ary);
     // rb_gcdebug_print_obj_condition(obj);
@@ -6962,6 +6977,7 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     printf("heap pages: %p %p\n", GET_HEAP_PAGE(ary), page);
     gc_compact_page(objspace, page);
     gc_update_references(ary);
+
     // gc_ref_update_array(ary);
     // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
     // gc_ref_update_array(ary);
@@ -9558,10 +9574,11 @@ rb_raw_obj_info(char *buff, const int buff_size, VALUE obj)
 #if USE_RGENGC
 	const int age = RVALUE_FLAGS_AGE(RBASIC(obj)->flags);
 
-	snprintf(buff, buff_size, "%p [%d%s%s%s%s] %s",
+	snprintf(buff, buff_size, "%p [%d%s%s%s%s%s] %s",
 		 (void *)obj, age,
 		 C(RVALUE_UNCOLLECTIBLE_BITMAP(obj),  "L"),
 		 C(RVALUE_MARK_BITMAP(obj),           "M"),
+		 C(RVALUE_PIN_BITMAP(obj),            "P"),
 		 C(RVALUE_MARKING_BITMAP(obj),        "R"),
 		 C(RVALUE_WB_UNPROTECTED_BITMAP(obj), "U"),
 		 obj_type_name(obj));
@@ -9743,6 +9760,7 @@ rb_gcdebug_print_obj_condition(VALUE obj)
     }
 
     fprintf(stderr, "marked?      : %s\n", MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), obj) ? "true" : "false");
+    fprintf(stderr, "pinned?      : %s\n", MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj) ? "true" : "false");
 #if USE_RGENGC
     fprintf(stderr, "age?         : %d\n", RVALUE_AGE(obj));
     fprintf(stderr, "old?         : %s\n", RVALUE_OLD_P(obj) ? "true" : "false");
