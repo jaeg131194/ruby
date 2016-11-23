@@ -1111,6 +1111,16 @@ check_rvalue_consistency(const VALUE obj)
 #endif
 
 static inline int
+gc_object_moved_p(VALUE obj)
+{
+    if (RB_SPECIAL_CONST_P(obj)) {
+	return FALSE;
+    } else {
+	return BUILTIN_TYPE(obj) == T_MOVED;
+    }
+}
+
+static inline int
 RVALUE_MARKED(VALUE obj)
 {
     check_rvalue_consistency(obj);
@@ -4503,7 +4513,10 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 
       case T_NODE:
 	obj = rb_gc_mark_node(&any->as.node);
-	if (obj) gc_mark(objspace, obj);
+	if (obj) {
+	    gc_pin(objspace, obj);
+	    gc_mark(objspace, obj);
+	}
 	return;			/* no need to mark class. */
 
       case T_IMEMO:
@@ -6684,12 +6697,16 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_OBJECT:
 	case T_ARRAY:
 	case T_BIGNUM:
-	    break;
-	case T_STRING:
-	case T_HASH:
-	case T_DATA:
 	case T_CLASS:
+	case T_MODULE:
+	case T_REGEXP:
+	case T_DATA:
+	case T_STRING:
 	    // FIXME: return false for embedded strings
+	    break;
+	case T_HASH:
+	    if(moving)
+		printf("want to move hash\n");
 	    return FALSE;
 	    break;
 	case T_IMEMO:
@@ -6716,7 +6733,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
 
-    rb_obj_info_dump_move(src, (VALUE)dest);
+    // rb_obj_info_dump_move((VALUE)src, (VALUE)dest);
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
@@ -6772,11 +6789,11 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 	while(BUILTIN_TYPE(free) != T_NONE)
 	    free++;
 
-	while(!gc_is_moveable_obj(objspace, scan, 1) && scan > free)
+	while(!gc_is_moveable_obj(objspace, (VALUE)scan, 1) && scan > free)
 	    scan--;
 
 	if (scan > free) {
-	    gc_move(objspace, scan, free);
+	    gc_move(objspace, (VALUE)scan, (VALUE)free);
 	    free++;
 	    scan--;
 	}
@@ -6832,10 +6849,10 @@ hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, in
 
     objspace = args->objspace;
 
-    if(is_pointer_to_heap(objspace, *key) && BUILTIN_TYPE(*key) == T_MOVED) {
+    if(is_pointer_to_heap(objspace, (void *)*key) && BUILTIN_TYPE(*key) == T_MOVED) {
 	*key = (VALUE)RMOVED(*key)->destination;
     }
-    if(is_pointer_to_heap(objspace, *value) && BUILTIN_TYPE(*value) == T_MOVED) {
+    if(is_pointer_to_heap(objspace, (void *)*value) && BUILTIN_TYPE(*value) == T_MOVED) {
 	*value = (VALUE)RMOVED(*value)->destination;
     }
 
@@ -6850,11 +6867,11 @@ hash_foreach_replace(st_data_t key, st_data_t value, st_data_t argp, int error)
 
     objspace = (rb_objspace_t *)argp;
 
-    if(is_pointer_to_heap(objspace, key) && BUILTIN_TYPE(key) == T_MOVED) {
+    if(is_pointer_to_heap(objspace, (void *)key) && BUILTIN_TYPE(key) == T_MOVED) {
 	return ST_REPLACE;
     }
 
-    if(is_pointer_to_heap(objspace, value) && BUILTIN_TYPE(value) == T_MOVED) {
+    if(is_pointer_to_heap(objspace, (void *)value) && BUILTIN_TYPE(value) == T_MOVED) {
 	return ST_REPLACE;
     }
     return ST_CHECK;
@@ -6877,6 +6894,15 @@ gc_ref_update_hash(VALUE v, rb_objspace_t * objspace)
     gc_update_table_refs(objspace, rb_hash_tbl_raw(v));
 }
 
+static VALUE
+gc_moved_fixme(VALUE obj)
+{
+    if (gc_object_moved_p(obj))
+	rb_bug("OMGFIX!!!!");
+
+    return obj;
+}
+
 static void
 gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
@@ -6890,38 +6916,116 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
     }
 
     switch(BUILTIN_TYPE(obj)) {
+	case T_CLASS:
+	case T_MODULE:
+	    if (!RCLASS_EXT(obj)) break;
+	    if (gc_object_moved_p(RCLASS_SUPER(obj)))
+		rb_bug("OMGFIX!!!!");
+	    break;
+
+	case T_ICLASS:
+	    if (gc_object_moved_p(RCLASS_SUPER(obj)))
+		rb_bug("OMGFIX!!!!");
+	    break;
+
 	case T_NIL:
 	case T_FIXNUM:
+	case T_IMEMO:
+	case T_NODE:
 	case T_MOVED:
 	case T_NONE:
 	    /* These can't move */
 	    return;
 
-	case T_CLASS:
-	case T_MODULE:
-	    if (!RCLASS_EXT(obj)) break;
-	    // rb_obj_info_dump(RCLASS_SUPER(obj));
+	case T_ARRAY:
+	    if (!FL_TEST(obj, ELTS_SHARED)) {
+		gc_ref_update_array(obj, objspace);
+	    }
+	    break;
+
+	case T_HASH:
+	    gc_ref_update_hash(obj, objspace);
+	    if (gc_object_moved_p(any->as.hash.ifnone))
+		rb_bug("OMGFIX!!!!");
+	    break;
+
+	case T_STRING:
+	case T_DATA:
+	    /* Don't need to do anything */
 	    break;
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
 	    break;
-	case T_ARRAY:
-	    gc_ref_update_array(obj, objspace);
+
+	case T_FILE:
+	    if (any->as.file.fptr) {
+		gc_moved_fixme(any->as.file.fptr->pathv);
+		gc_moved_fixme(any->as.file.fptr->tied_io_for_writing);
+		gc_moved_fixme(any->as.file.fptr->writeconv_asciicompat);
+		gc_moved_fixme(any->as.file.fptr->writeconv_pre_ecopts);
+		gc_moved_fixme(any->as.file.fptr->encs.ecopts);
+		gc_moved_fixme(any->as.file.fptr->write_lock);
+	    }
 	    break;
-	case T_HASH:
-	    gc_ref_update_hash(obj, objspace);
+	case T_REGEXP:
+	    if (gc_object_moved_p(any->as.regexp.src)) {
+		any->as.regexp.src = (VALUE)RMOVED(any->as.regexp.src)->destination;
+	    }
 	    break;
-	case T_STRING:
-	    /* Don't need to do anything */
+
+	case T_FLOAT:
+	case T_BIGNUM:
+	case T_SYMBOL:
+	    break;
+
+	case T_MATCH:
+	    if (gc_object_moved_p(any->as.match.regexp))
+		rb_bug("OMGFIX!!!!");
+
+	    if (any->as.match.str) {
+		if (gc_object_moved_p(any->as.match.str))
+		    rb_bug("OMGFIX!!!!");
+	    }
+	    break;
+
+	case T_RATIONAL:
+	    rb_bug("OMGFIX!!!!");
+	    gc_mark(objspace, any->as.rational.num);
+	    gc_mark(objspace, any->as.rational.den);
+	    break;
+
+	case T_COMPLEX:
+	    if (gc_object_moved_p(any->as.complex.real))
+		rb_bug("OMGFIX!!!!");
+	    if (gc_object_moved_p(any->as.complex.imag))
+		rb_bug("OMGFIX!!!!");
+
+	    break;
+
+	case T_STRUCT:
+	    {
+		long len = RSTRUCT_LEN(obj);
+		const VALUE *ptr = RSTRUCT_CONST_PTR(obj);
+
+		while (len--) {
+		    if (gc_object_moved_p(*ptr++))
+			rb_bug("OMGFIX!!!!");
+		}
+	    }
 	    break;
 	default:
-	    // rb_obj_info_dump(obj);
+#if GC_DEBUG
+	    rb_gcdebug_print_obj_condition((VALUE)obj);
+	    rb_obj_info_dump(obj);
+	    rb_bug("OMGFIX!!!!");
+#endif
 	    break;
+
     }
 
     if (is_markable_object(objspace, any->as.basic.klass) && BUILTIN_TYPE(any->as.basic.klass) == T_MOVED) {
-	rb_bug("OMGOMGOMGOMG");
+	any->as.basic.klass = (VALUE)RMOVED(any->as.basic.klass)->destination;
     }
 }
 static int
