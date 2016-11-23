@@ -6904,6 +6904,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
+	    break;
 	case T_ARRAY:
 	    gc_ref_update_array(obj, objspace);
 	    break;
@@ -6965,8 +6966,9 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     /* should only mark roots */
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
-    /* pin roots */
+    /* Pin things found via marking */
     gc_marks_start(objspace, TRUE);
+    /* pin roots */
     rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
 
     // rb_gcdebug_print_obj_condition(ary);
