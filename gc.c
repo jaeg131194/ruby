@@ -4403,6 +4403,7 @@ gc_mark(rb_objspace_t *objspace, VALUE obj)
 void
 rb_gc_mark(VALUE ptr)
 {
+    gc_pin(&rb_objspace, ptr);
     gc_mark(&rb_objspace, ptr);
 }
 
