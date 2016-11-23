@@ -6845,17 +6845,20 @@ hash_foreach_replace(st_data_t key, st_data_t value, st_data_t argp, int error)
 }
 
 static void
-gc_ref_update_hash(VALUE v, rb_objspace_t * objspace)
+gc_update_table_refs(rb_objspace_t * objspace, st_table *ht)
 {
-    st_table * ht;
-
-    if (FL_TEST(v, ELTS_SHARED))
-	return;
-
-    ht = rb_hash_tbl_raw(v);
     if (st_foreach_with_replace(ht, hash_foreach_replace, hash_replace_ref, (st_data_t)objspace)) {
 	rb_raise(rb_eRuntimeError, "hash modified during iteration");
     }
+}
+
+static void
+gc_ref_update_hash(VALUE v, rb_objspace_t * objspace)
+{
+    if (FL_TEST(v, ELTS_SHARED))
+	return;
+
+    gc_update_table_refs(objspace, rb_hash_tbl_raw(v));
 }
 
 static void
@@ -6877,6 +6880,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_NONE:
 	    /* These can't move */
 	    return;
+
+	case T_CLASS:
+	case T_MODULE:
+	    gc_update_table_refs(objspace, RCLASS_M_TBL(obj));
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
