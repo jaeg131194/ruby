@@ -860,6 +860,7 @@ static void gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *heap);
 
 static inline void gc_mark(rb_objspace_t *objspace, VALUE ptr);
 static inline void gc_pin(rb_objspace_t *objspace, VALUE ptr);
+static inline void gc_mark_and_pin(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_maybe(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_children(rb_objspace_t *objspace, VALUE ptr);
@@ -4115,7 +4116,7 @@ mark_method_entry(rb_objspace_t *objspace, const rb_method_entry_t *me)
 	    break;
 	  case VM_METHOD_TYPE_ATTRSET:
 	  case VM_METHOD_TYPE_IVAR:
-	    gc_mark(objspace, def->body.attr.location);
+	    gc_mark_and_pin(objspace, def->body.attr.location);
 	    break;
 	  case VM_METHOD_TYPE_BMETHOD:
 	    gc_mark(objspace, def->body.proc);
@@ -4143,8 +4144,7 @@ mark_method_entry_i(VALUE me, void *data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
 
-    gc_pin(objspace, me);
-    gc_mark(objspace, me);
+    gc_mark_and_pin(objspace, me);
     return ID_TABLE_CONTINUE;
 }
 
@@ -6790,7 +6790,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 
     pstart = page->start;
 
-    gc_print_page(objspace, page->start, pstart + page->total_slots, page);
+    gc_print_page(objspace, page->start, page->start + page->total_slots, page);
 
     free = page->start;
     scan = free + page->total_slots - 1;
@@ -6960,16 +6960,17 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 
 	case T_STRING:
+	    if (STR_SHARED_P(obj)) {
+		if (gc_object_moved_p(objspace, any->as.string.as.heap.aux.shared)) {
+		    any->as.string.as.heap.aux.shared = (VALUE)RMOVED(any->as.string.as.heap.aux.shared)->destination;
+		}
+	    }
 	case T_DATA:
 	    /* Don't need to do anything */
 	    break;
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
-
-	    if (gc_object_moved_p(objspace, RBASIC(obj)->klass))
-		RBASIC(obj)->klass = (VALUE)RMOVED(RBASIC(obj)->klass)->destination;
-
 	    break;
 
 	case T_FILE:
