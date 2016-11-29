@@ -4030,6 +4030,16 @@ rb_gc_mark_locations(const VALUE *start, const VALUE *end)
 }
 
 static void
+gc_mark_and_pin_values(rb_objspace_t *objspace, long n, const VALUE *values)
+{
+    long i;
+
+    for (i=0; i<n; i++) {
+	gc_mark_and_pin(objspace, values[i]);
+    }
+}
+
+static void
 gc_mark_values(rb_objspace_t *objspace, long n, const VALUE *values)
 {
     long i;
@@ -4111,28 +4121,28 @@ mark_method_entry(rb_objspace_t *objspace, const rb_method_entry_t *me)
 {
     const rb_method_definition_t *def = me->def;
 
-    gc_mark(objspace, me->owner);
-    gc_mark(objspace, me->defined_class);
+    gc_mark_and_pin(objspace, me->owner);
+    gc_mark_and_pin(objspace, me->defined_class);
 
     if (def) {
 	switch (def->type) {
 	  case VM_METHOD_TYPE_ISEQ:
-	    if (def->body.iseq.iseqptr) gc_mark(objspace, (VALUE)def->body.iseq.iseqptr);
-	    gc_mark(objspace, (VALUE)def->body.iseq.cref);
+	    if (def->body.iseq.iseqptr) gc_mark_and_pin(objspace, (VALUE)def->body.iseq.iseqptr);
+	    gc_mark_and_pin(objspace, (VALUE)def->body.iseq.cref);
 	    break;
 	  case VM_METHOD_TYPE_ATTRSET:
 	  case VM_METHOD_TYPE_IVAR:
 	    gc_mark_and_pin(objspace, def->body.attr.location);
 	    break;
 	  case VM_METHOD_TYPE_BMETHOD:
-	    gc_mark(objspace, def->body.proc);
+	    gc_mark_and_pin(objspace, def->body.proc);
 	    break;
 	  case VM_METHOD_TYPE_ALIAS:
-	    gc_mark(objspace, (VALUE)def->body.alias.original_me);
+	    gc_mark_and_pin(objspace, (VALUE)def->body.alias.original_me);
 	    return;
 	  case VM_METHOD_TYPE_REFINED:
-	    gc_mark(objspace, (VALUE)def->body.refined.orig_me);
-	    gc_mark(objspace, (VALUE)def->body.refined.owner);
+	    gc_mark_and_pin(objspace, (VALUE)def->body.refined.orig_me);
+	    gc_mark_and_pin(objspace, (VALUE)def->body.refined.owner);
 	    break;
 	  case VM_METHOD_TYPE_CFUNC:
 	  case VM_METHOD_TYPE_ZSUPER:
@@ -4254,6 +4264,19 @@ rb_mark_tbl(st_table *tbl)
 }
 
 static void
+gc_mark_and_pin_maybe(rb_objspace_t *objspace, VALUE obj)
+{
+    (void)VALGRIND_MAKE_MEM_DEFINED(&obj, sizeof(obj));
+    if (is_pointer_to_heap(objspace, (void *)obj)) {
+	int type = BUILTIN_TYPE(obj);
+	if (type != T_ZOMBIE && type != T_NONE) {
+	    gc_pin(objspace, obj);
+	    gc_mark_ptr(objspace, obj);
+	}
+    }
+}
+
+static void
 gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
 {
     (void)VALGRIND_MAKE_MEM_DEFINED(&obj, sizeof(obj));
@@ -4268,7 +4291,7 @@ gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
 void
 rb_gc_mark_maybe(VALUE obj)
 {
-    gc_mark_maybe(&rb_objspace, obj);
+    gc_mark_and_pin_maybe(&rb_objspace, obj);
 }
 
 static inline int
@@ -4470,33 +4493,33 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 	{
 	    const rb_env_t *env = (const rb_env_t *)obj;
 	    VM_ASSERT(VM_ENV_ESCAPED_P(env->ep));
-	    gc_mark_values(objspace, (long)env->env_size, env->env);
+	    gc_mark_and_pin_values(objspace, (long)env->env_size, env->env);
 	    VM_ENV_FLAGS_SET(env->ep, VM_ENV_FLAG_WB_REQUIRED);
-	    gc_mark(objspace, (VALUE)rb_vm_env_prev_env(env));
-	    gc_mark(objspace, (VALUE)env->iseq);
+	    gc_mark_and_pin(objspace, (VALUE)rb_vm_env_prev_env(env));
+	    gc_mark_and_pin(objspace, (VALUE)env->iseq);
 	}
 	return;
       case imemo_cref:
-	gc_mark(objspace, RANY(obj)->as.imemo.cref.klass);
-	gc_mark(objspace, (VALUE)RANY(obj)->as.imemo.cref.next);
-	gc_mark(objspace, RANY(obj)->as.imemo.cref.refinements);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.cref.klass);
+	gc_mark_and_pin(objspace, (VALUE)RANY(obj)->as.imemo.cref.next);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.cref.refinements);
 	return;
       case imemo_svar:
-	gc_mark(objspace, RANY(obj)->as.imemo.svar.cref_or_me);
-	gc_mark(objspace, RANY(obj)->as.imemo.svar.lastline);
-	gc_mark(objspace, RANY(obj)->as.imemo.svar.backref);
-	gc_mark(objspace, RANY(obj)->as.imemo.svar.others);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.cref_or_me);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.lastline);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.backref);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.others);
 	return;
       case imemo_throw_data:
-	gc_mark(objspace, RANY(obj)->as.imemo.throw_data.throw_obj);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.throw_data.throw_obj);
 	return;
       case imemo_ifunc:
-	gc_mark_maybe(objspace, (VALUE)RANY(obj)->as.imemo.ifunc.data);
+	gc_mark_and_pin_maybe(objspace, (VALUE)RANY(obj)->as.imemo.ifunc.data);
 	return;
       case imemo_memo:
-	gc_mark(objspace, RANY(obj)->as.imemo.memo.v1);
-	gc_mark(objspace, RANY(obj)->as.imemo.memo.v2);
-	gc_mark_maybe(objspace, RANY(obj)->as.imemo.memo.u3.value);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.memo.v1);
+	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.memo.v2);
+	gc_mark_and_pin_maybe(objspace, RANY(obj)->as.imemo.memo.u3.value);
 	return;
       case imemo_ment:
 	mark_method_entry(objspace, &RANY(obj)->as.imemo.ment);
@@ -6714,6 +6737,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_ARRAY:
 	case T_BIGNUM:
 	case T_CLASS:
+	case T_ICLASS:
 	case T_MODULE:
 	case T_REGEXP:
 	case T_DATA:
@@ -6948,7 +6972,9 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    return;
 
 	case T_ARRAY:
-	    if (!FL_TEST(obj, ELTS_SHARED)) {
+	    if (FL_TEST(obj, ELTS_SHARED)) {
+		UPDATE_IF_MOVED(objspace, any->as.array.as.heap.aux.shared);
+	    } else {
 		gc_ref_update_array(obj, objspace);
 	    }
 	    break;
