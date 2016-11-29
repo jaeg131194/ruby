@@ -1111,7 +1111,7 @@ check_rvalue_consistency(const VALUE obj)
 #endif
 
 static inline int
-gc_object_moved_p(VALUE obj)
+gc_object_moved_p(rb_objspace_t * objspace, VALUE obj)
 {
     if (RB_SPECIAL_CONST_P(obj)) {
 	return FALSE;
@@ -3853,6 +3853,9 @@ free_stack_chunks(mark_stack_t *stack)
 static void
 push_mark_stack(mark_stack_t *stack, VALUE data)
 {
+    if (BUILTIN_TYPE(data) == T_MOVED) {
+	rb_bug("WTF");
+    }
     if (stack->index == stack->limit) {
         push_mark_stack_chunk(stack);
     }
@@ -4397,6 +4400,14 @@ gc_mark_ptr(rb_objspace_t *objspace, VALUE obj)
 }
 
 static inline void
+gc_mark_and_pin(rb_objspace_t *objspace, VALUE obj)
+{
+    if (!is_markable_object(objspace, obj)) return;
+    gc_mark_ptr(objspace, obj);
+    MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj);
+}
+
+static inline void
 gc_pin(rb_objspace_t *objspace, VALUE obj)
 {
     if (!is_markable_object(objspace, obj)) return;
@@ -4413,8 +4424,7 @@ gc_mark(rb_objspace_t *objspace, VALUE obj)
 void
 rb_gc_mark(VALUE ptr)
 {
-    gc_pin(&rb_objspace, ptr);
-    gc_mark(&rb_objspace, ptr);
+    gc_mark_and_pin(&rb_objspace, ptr);
 }
 
 /* CAUTION: THIS FUNCTION ENABLE *ONLY BEFORE* SWEEPING.
@@ -6895,9 +6905,9 @@ gc_ref_update_hash(VALUE v, rb_objspace_t * objspace)
 }
 
 static VALUE
-gc_moved_fixme(VALUE obj)
+gc_moved_fixme(rb_objspace_t *objspace, VALUE obj)
 {
-    if (gc_object_moved_p(obj))
+    if (gc_object_moved_p(objspace, obj))
 	rb_bug("OMGFIX!!!!");
 
     return obj;
@@ -6919,12 +6929,12 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_CLASS:
 	case T_MODULE:
 	    if (!RCLASS_EXT(obj)) break;
-	    if (gc_object_moved_p(RCLASS_SUPER(obj)))
+	    if (gc_object_moved_p(objspace, RCLASS_SUPER(obj)))
 		rb_bug("OMGFIX!!!!");
 	    break;
 
 	case T_ICLASS:
-	    if (gc_object_moved_p(RCLASS_SUPER(obj)))
+	    if (gc_object_moved_p(objspace, RCLASS_SUPER(obj)))
 		rb_bug("OMGFIX!!!!");
 	    break;
 
@@ -6945,7 +6955,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_HASH:
 	    gc_ref_update_hash(obj, objspace);
-	    if (gc_object_moved_p(any->as.hash.ifnone))
+	    if (gc_object_moved_p(objspace, any->as.hash.ifnone))
 		rb_bug("OMGFIX!!!!");
 	    break;
 
@@ -6956,21 +6966,24 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
-	    gc_moved_fixme(RBASIC(obj)->klass);
+
+	    if (gc_object_moved_p(objspace, RBASIC(obj)->klass))
+		RBASIC(obj)->klass = (VALUE)RMOVED(RBASIC(obj)->klass)->destination;
+
 	    break;
 
 	case T_FILE:
 	    if (any->as.file.fptr) {
-		gc_moved_fixme(any->as.file.fptr->pathv);
-		gc_moved_fixme(any->as.file.fptr->tied_io_for_writing);
-		gc_moved_fixme(any->as.file.fptr->writeconv_asciicompat);
-		gc_moved_fixme(any->as.file.fptr->writeconv_pre_ecopts);
-		gc_moved_fixme(any->as.file.fptr->encs.ecopts);
-		gc_moved_fixme(any->as.file.fptr->write_lock);
+		gc_moved_fixme(objspace, any->as.file.fptr->pathv);
+		gc_moved_fixme(objspace, any->as.file.fptr->tied_io_for_writing);
+		gc_moved_fixme(objspace, any->as.file.fptr->writeconv_asciicompat);
+		gc_moved_fixme(objspace, any->as.file.fptr->writeconv_pre_ecopts);
+		gc_moved_fixme(objspace, any->as.file.fptr->encs.ecopts);
+		gc_moved_fixme(objspace, any->as.file.fptr->write_lock);
 	    }
 	    break;
 	case T_REGEXP:
-	    if (gc_object_moved_p(any->as.regexp.src)) {
+	    if (gc_object_moved_p(objspace, any->as.regexp.src)) {
 		any->as.regexp.src = (VALUE)RMOVED(any->as.regexp.src)->destination;
 	    }
 	    break;
@@ -6981,11 +6994,11 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 
 	case T_MATCH:
-	    if (gc_object_moved_p(any->as.match.regexp))
+	    if (gc_object_moved_p(objspace, any->as.match.regexp))
 		rb_bug("OMGFIX!!!!");
 
 	    if (any->as.match.str) {
-		if (gc_object_moved_p(any->as.match.str))
+		if (gc_object_moved_p(objspace, any->as.match.str))
 		    rb_bug("OMGFIX!!!!");
 	    }
 	    break;
@@ -6997,9 +7010,9 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 
 	case T_COMPLEX:
-	    if (gc_object_moved_p(any->as.complex.real))
+	    if (gc_object_moved_p(objspace, any->as.complex.real))
 		rb_bug("OMGFIX!!!!");
-	    if (gc_object_moved_p(any->as.complex.imag))
+	    if (gc_object_moved_p(objspace, any->as.complex.imag))
 		rb_bug("OMGFIX!!!!");
 
 	    break;
@@ -7010,7 +7023,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 		const VALUE *ptr = RSTRUCT_CONST_PTR(obj);
 
 		while (len--) {
-		    if (gc_object_moved_p(*ptr++))
+		    if (gc_object_moved_p(objspace, *ptr++))
 			rb_bug("OMGFIX!!!!");
 		}
 	    }
@@ -7074,6 +7087,8 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
 
     /* Pin things found via marking */
     gc_marks_start(objspace, TRUE);
+    gc_mark_stacked_objects_all(objspace);
+    gc_marks_finish(objspace);
     /* pin roots */
     rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
 
@@ -7085,6 +7100,7 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     printf("heap pages: %p %p\n", GET_HEAP_PAGE(ary), page);
     gc_compact_page(objspace, page);
     gc_update_references(ary);
+    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
     // gc_ref_update_array(ary);
     // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
