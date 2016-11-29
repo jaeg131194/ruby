@@ -6718,12 +6718,8 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_REGEXP:
 	case T_DATA:
 	case T_STRING:
-	    // FIXME: return false for embedded strings
-	    break;
 	case T_HASH:
-	    if(moving)
-		printf("want to move hash\n");
-	    return FALSE;
+	    // FIXME: return false for embedded strings
 	    break;
 	case T_IMEMO:
 	case T_NODE:
