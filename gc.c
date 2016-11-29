@@ -6956,6 +6956,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_OBJECT:
 	    gc_ref_update_object(obj, objspace);
+	    gc_moved_fixme(RBASIC(obj)->klass);
 	    break;
 
 	case T_FILE:
