@@ -6789,20 +6789,20 @@ gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct hea
 	if (type != T_ZOMBIE && type != T_NONE) {
 	    if (type == T_MOVED) {
 		assert(!rb_objspace_marked_object_p(v));
-		// printf("➡️ ");
+		printf("➡️ ");
 	    } else {
 		if (gc_is_moveable_obj(objspace, v, 0)) {
-		    // printf("🙆 ");
+		    printf("🙆 ");
 		} else {
-		    // printf("🙅 ");
-		    printf("SLOT %s \n", type_name(TYPE(v), v));
+		    printf("🙅 ");
+		    // printf("SLOT %s \n", type_name(TYPE(v), v));
 		}
 	    }
 	} else {
-	    // printf("🆓 ");
+	    printf("🆓 ");
 	}
     }
-    // printf("\n");
+    printf("\n");
 
     printf("total: %d, free: %d, found: %d\n", page->total_slots, page->free_slots, found);
 }
