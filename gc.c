@@ -7108,7 +7108,7 @@ rb_gc_pin_heap(VALUE mod)
 }
 
 static VALUE
-gc_compact(VALUE mod, VALUE obj, VALUE ary)
+rb_gc_compact(VALUE mod)
 {
     rb_objspace_t *objspace = &rb_objspace;
     struct heap_page *page;
@@ -7118,7 +7118,7 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     for (int j = 0; j < heap_pages_sorted_length; j++) {
 	gc_compact_page(objspace, heap_pages_sorted[j]);
     }
-    gc_update_references(ary);
+    gc_update_references(Qnil);
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
     // gc_ref_update_array(ary);
@@ -10049,7 +10049,7 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "count", gc_count, 0);
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
-    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 2);
+    rb_define_singleton_method(rb_mGC, "compact", rb_gc_compact, 0);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
     gc_constants = rb_hash_new();
