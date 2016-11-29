@@ -6931,13 +6931,11 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_CLASS:
 	case T_MODULE:
 	    if (!RCLASS_EXT(obj)) break;
-	    if (gc_object_moved_p(objspace, RCLASS_SUPER(obj)))
-		rb_bug("OMGFIX!!!!");
+	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
 
 	case T_ICLASS:
-	    if (gc_object_moved_p(objspace, RCLASS_SUPER(obj)))
-		rb_bug("OMGFIX!!!!");
+	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
 
 	case T_NIL:
@@ -6957,8 +6955,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_HASH:
 	    gc_ref_update_hash(obj, objspace);
-	    if (gc_object_moved_p(objspace, any->as.hash.ifnone))
-		rb_bug("OMGFIX!!!!");
+	    UPDATE_IF_MOVED(objspace, any->as.hash.ifnone);
 	    break;
 
 	case T_STRING:
@@ -6975,7 +6972,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_FILE:
 	    if (any->as.file.fptr) {
-		gc_moved_fixme(objspace, any->as.file.fptr->pathv);
+		UPDATE_IF_MOVED(objspace, any->as.file.fptr->pathv);
 		gc_moved_fixme(objspace, any->as.file.fptr->tied_io_for_writing);
 		gc_moved_fixme(objspace, any->as.file.fptr->writeconv_asciicompat);
 		gc_moved_fixme(objspace, any->as.file.fptr->writeconv_pre_ecopts);
@@ -7018,12 +7015,11 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
 	case T_STRUCT:
 	    {
-		long len = RSTRUCT_LEN(obj);
-		const VALUE *ptr = RSTRUCT_CONST_PTR(obj);
+		long i, len = RSTRUCT_LEN(obj);
+		VALUE *ptr = RSTRUCT_CONST_PTR(obj);
 
-		while (len--) {
-		    if (gc_object_moved_p(objspace, *ptr++))
-			rb_bug("OMGFIX!!!!");
+		for(i = 0; i < len; i++) {
+		    UPDATE_IF_MOVED(objspace, ptr[i]);
 		}
 	    }
 	    break;
@@ -7097,7 +7093,10 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     page = GET_HEAP_PAGE(obj);
 
     printf("heap pages: %p %p\n", GET_HEAP_PAGE(ary), page);
-    gc_compact_page(objspace, page);
+
+    for (int j = 0; j < heap_pages_sorted_length; j++) {
+	gc_compact_page(objspace, heap_pages_sorted[j]);
+    }
     gc_update_references(ary);
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
