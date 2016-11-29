@@ -4060,8 +4060,7 @@ static int
 mark_entry(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
-    gc_pin(objspace, (VALUE)value);
-    gc_mark(objspace, (VALUE)value);
+    gc_mark_and_pin(objspace, (VALUE)value);
     return ST_CONTINUE;
 }
 
@@ -4178,10 +4177,8 @@ mark_const_entry_i(VALUE value, void *data)
     const rb_const_entry_t *ce = (const rb_const_entry_t *)value;
     rb_objspace_t *objspace = data;
 
-    gc_pin(objspace, ce->value);
-    gc_pin(objspace, ce->file);
-    gc_mark(objspace, ce->value);
-    gc_mark(objspace, ce->file);
+    gc_mark_and_pin(objspace, ce->value);
+    gc_mark_and_pin(objspace, ce->file);
     return ID_TABLE_CONTINUE;
 }
 
@@ -4553,8 +4550,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
       case T_NODE:
 	obj = rb_gc_mark_node(&any->as.node);
 	if (obj) {
-	    gc_pin(objspace, obj);
-	    gc_mark(objspace, obj);
+	    gc_mark_and_pin(objspace, obj);
 	}
 	return;			/* no need to mark class. */
 
@@ -6717,19 +6713,12 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 static int
 gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 {
-    if (BUILTIN_TYPE(obj) == T_NONE || BUILTIN_TYPE(obj) == T_MOVED) {
+    if (SPECIAL_CONST_P(obj) || rb_objspace_pinned_object_p(obj)) {
 	return FALSE;
     }
 
-    if (rb_objspace_pinned_object_p(obj))
-	return FALSE;
-
-    if (!is_markable_object(objspace, obj))
-	return FALSE;
-
     switch(BUILTIN_TYPE(obj)) {
 	case T_NONE:
-	case T_MOVED:
 	case T_NIL:
 	    return FALSE;
 	    break;
@@ -6742,17 +6731,17 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_REGEXP:
 	case T_DATA:
 	case T_STRING:
+	case T_SYMBOL:
 	case T_HASH:
 	    // FIXME: return false for embedded strings
-	    break;
 	case T_IMEMO:
 	case T_NODE:
-	    // FIXME: are these OK to move?
-	    return FALSE;
 	    break;
 	default:
-	    if(moving)
-		printf("moving type: %d\n", BUILTIN_TYPE(obj));
+	    if(moving) {
+		printf("moving unknown type: %d\n", BUILTIN_TYPE(obj));
+		rb_bug("WAAAT");
+	    }
 	    break;
     }
 
@@ -6786,6 +6775,8 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     src->as.moved.destination = (VALUE)dest;
 }
 
+static const char * type_name(int type, VALUE obj);
+
 static void
 gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct heap_page *page)
 {
@@ -6798,19 +6789,20 @@ gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct hea
 	if (type != T_ZOMBIE && type != T_NONE) {
 	    if (type == T_MOVED) {
 		assert(!rb_objspace_marked_object_p(v));
-		printf("➡️ ");
+		// printf("➡️ ");
 	    } else {
 		if (gc_is_moveable_obj(objspace, v, 0)) {
-		    printf("🙆 ");
+		    // printf("🙆 ");
 		} else {
-		    printf("🙅 ");
+		    // printf("🙅 ");
+		    printf("SLOT %s \n", type_name(TYPE(v), v));
 		}
 	    }
 	} else {
-	    printf("🆓 ");
+	    // printf("🆓 ");
 	}
     }
-    printf("\n");
+    // printf("\n");
 
     printf("total: %d, free: %d, found: %d\n", page->total_slots, page->free_slots, found);
 }
@@ -6842,7 +6834,7 @@ gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
 	}
     }
 
-    gc_print_page(objspace, page->start, pstart + page->total_slots, page);
+    // gc_print_page(objspace, page->start, pstart + page->total_slots, page);
 
 }
 
@@ -7094,10 +7086,9 @@ gc_pin_root(const char *category, VALUE obj, void *data)
 }
 
 static VALUE
-gc_compact(VALUE mod, VALUE obj, VALUE ary)
+rb_gc_pin_heap(VALUE mod)
 {
     rb_objspace_t *objspace = &rb_objspace;
-    struct heap_page *page;
 
     rb_gc();
 
@@ -7113,12 +7104,16 @@ gc_compact(VALUE mod, VALUE obj, VALUE ary)
     /* pin roots */
     rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
 
-    // rb_gcdebug_print_obj_condition(ary);
-    // rb_gcdebug_print_obj_condition(obj);
+    return mod;
+}
 
-    page = GET_HEAP_PAGE(obj);
+static VALUE
+gc_compact(VALUE mod, VALUE obj, VALUE ary)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    struct heap_page *page;
 
-    printf("heap pages: %p %p\n", GET_HEAP_PAGE(ary), page);
+    rb_gc_pin_heap(mod);
 
     for (int j = 0; j < heap_pages_sorted_length; j++) {
 	gc_compact_page(objspace, heap_pages_sorted[j]);
@@ -9744,9 +9739,11 @@ rb_raw_obj_info(char *buff, const int buff_size, VALUE obj)
 	    snprintf(buff, buff_size, "%s (temporary internal)", buff);
 	}
 	else {
+	    if (RTEST(RBASIC(obj)->klass)) {
 	    VALUE class_path = rb_class_path_cached(RBASIC(obj)->klass);
 	    if (!NIL_P(class_path)) {
 		snprintf(buff, buff_size, "%s (%s)", buff, RSTRING_PTR(class_path));
+	    }
 	    }
 	}
 
