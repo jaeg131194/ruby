@@ -6853,11 +6853,11 @@ struct update_debug {
 };
 
 static int
-hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, int existing)
+hash_replace_ref(st_data_t *key, st_data_t *value, st_data_t argp, int existing)
 {
     rb_objspace_t *objspace;
 
-    objspace = args->objspace;
+    objspace = (rb_objspace_t *)argp;
 
     if(is_pointer_to_heap(objspace, (void *)*key) && BUILTIN_TYPE(*key) == T_MOVED) {
 	*key = (VALUE)RMOVED(*key)->destination;
@@ -6866,7 +6866,6 @@ hash_replace_ref(st_data_t *key, st_data_t *value, struct update_debug *args, in
 	*value = (VALUE)RMOVED(*value)->destination;
     }
 
-    printf("MOVED!!\n");
     return ST_CONTINUE;
 }
 
