@@ -6740,8 +6740,11 @@ void rb_obj_info_dump_move(VALUE obj, VALUE newloc);
 static void
 gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 {
+    int marked;
     RVALUE *dest = (RVALUE *)free;
     RVALUE *src = (RVALUE *)scan;
+
+    marked = rb_objspace_marked_object_p((VALUE)src);
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
 
@@ -6749,7 +6752,11 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
-    CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
+    if (marked) {
+	MARK_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
+    } else {
+	CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
+    }
 
     src->as.moved.flags = T_MOVED;
     src->as.moved.destination = (VALUE)dest;
