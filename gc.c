@@ -6756,19 +6756,22 @@ static void
 gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 {
     int marked;
+    int wb_unprotected;
     RVALUE *dest = (RVALUE *)free;
     RVALUE *src = (RVALUE *)scan;
     struct heap_page *from;
     struct heap_page *to;
 
     marked = rb_objspace_marked_object_p((VALUE)src);
+    wb_unprotected = RVALUE_WB_UNPROTECTED((VALUE)src);
 
     from = GET_HEAP_PAGE((VALUE)src);
     to = GET_HEAP_PAGE((VALUE)dest);
 
-    printf("move %p -> %p %s\n", src, dest, obj_type_name(src));
+    printf("move %p -> %p %s class: %p %d\n", src, dest, obj_type_name(src), rb_class_of(src), rb_type(rb_class_of(src)));
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
+    CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)src), (VALUE)src);
 
     // rb_obj_info_dump_move((VALUE)src, (VALUE)dest);
     memcpy(dest, src, sizeof(RVALUE));
@@ -6778,6 +6781,12 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 	MARK_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
     } else {
 	CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
+    }
+
+    if (wb_unprotected) {
+	MARK_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)dest), (VALUE)dest);
+    } else {
+	CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)dest), (VALUE)dest);
     }
 
     if (from != to) {
