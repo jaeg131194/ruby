@@ -6750,14 +6750,23 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 
 void rb_obj_info_dump_move(VALUE obj, VALUE newloc);
 
+static const char * obj_type_name(VALUE obj);
+
 static void
 gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 {
     int marked;
     RVALUE *dest = (RVALUE *)free;
     RVALUE *src = (RVALUE *)scan;
+    struct heap_page *from;
+    struct heap_page *to;
 
     marked = rb_objspace_marked_object_p((VALUE)src);
+
+    from = GET_HEAP_PAGE((VALUE)src);
+    to = GET_HEAP_PAGE((VALUE)dest);
+
+    printf("move %p -> %p %s\n", src, dest, obj_type_name(src));
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
 
@@ -6771,6 +6780,15 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 	CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
     }
 
+    if (from != to) {
+	if (from != GET_HEAP_PAGE((VALUE)src)) {
+	    printf("WTF!!!\n");
+	}
+	if (to != GET_HEAP_PAGE((VALUE)dest)) {
+	    printf("WTF!!!\n");
+	}
+    }
+
     src->as.moved.flags = T_MOVED;
     src->as.moved.destination = (VALUE)dest;
 }
@@ -6778,64 +6796,129 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 static const char * type_name(int type, VALUE obj);
 
 static void
-gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct heap_page *page)
+gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct heap_page *page, RVALUE *free, RVALUE *scan)
 {
     short found = 0;
     VALUE v;
 
     v = (VALUE)pstart;
     for(; v != (VALUE)pend; v += sizeof(RVALUE)) {
-	int type = BUILTIN_TYPE(v);
-	if (type != T_ZOMBIE && type != T_NONE) {
-	    if (type == T_MOVED) {
-		assert(!rb_objspace_marked_object_p(v));
-		printf("➡️ ");
-	    } else {
-		if (gc_is_moveable_obj(objspace, v, 0)) {
-		    printf("🙆 ");
-		} else {
-		    printf("🙅 ");
-		    // printf("SLOT %s \n", type_name(TYPE(v), v));
-		}
-	    }
+	if((VALUE)free == v) {
+	    printf("👉 ");
+	} else if ((VALUE)scan == v) {
+	    printf("👈 ");
 	} else {
-	    printf("🆓 ");
+	    int type = BUILTIN_TYPE(v);
+	    if (type != T_ZOMBIE && type != T_NONE) {
+		if (type == T_MOVED) {
+		    assert(!rb_objspace_marked_object_p(v));
+		    printf("➡️ ");
+		} else {
+		    if (gc_is_moveable_obj(objspace, v, 0)) {
+			printf("🙆 ");
+		    } else {
+			printf("🙅 ");
+			// printf("SLOT %s \n", type_name(TYPE(v), v));
+		    }
+		}
+	    } else {
+		printf("🆓 ");
+	    }
 	}
     }
-    printf("\n");
+}
 
-    printf("total: %d, free: %d, found: %d\n", page->total_slots, page->free_slots, found);
+struct heap_cursor {
+    RVALUE *slot;
+    int index;
+    struct heap_page *page;
+    rb_objspace_t * objspace;
+};
+
+static void
+advance_cursor(struct heap_cursor *free)
+{
+    rb_objspace_t *objspace = free->objspace;
+
+    if (free->slot == free->page->start + free->page->total_slots - 1) {
+	printf("Advancing page\n");
+	free->index++;
+	free->page = heap_pages_sorted[free->index];
+	free->slot = free->page->start;
+    } else {
+	free->slot++;
+    }
 }
 
 static void
-gc_compact_page(rb_objspace_t *objspace, struct heap_page *page)
+retreat_cursor(struct heap_cursor *scan)
 {
-    RVALUE *pstart = NULL;
-    RVALUE *free = NULL, *scan;
+    rb_objspace_t *objspace = scan->objspace;
 
-    pstart = page->start;
+    if (scan->slot == scan->page->start) {
+	scan->index--;
+	scan->page = heap_pages_sorted[scan->index];
+	scan->slot = scan->page->start + scan->page->total_slots - 1;
+    } else {
+	scan->slot--;
+    }
+}
 
-    gc_print_page(objspace, page->start, page->start + page->total_slots, page);
+static int
+not_met(struct heap_cursor *free, struct heap_cursor *scan)
+{
+    if (free->index < scan->index)
+	return 1;
 
-    free = page->start;
-    scan = free + page->total_slots - 1;
+    if (free->index > scan->index)
+	return 0;
 
-    while (free < scan) {
-	while(BUILTIN_TYPE(free) != T_NONE)
-	    free++;
+    return free->slot < scan->slot;
+}
 
-	while(!gc_is_moveable_obj(objspace, (VALUE)scan, 1) && scan > free)
-	    scan--;
+static void
+init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_cursor *scan)
+{
+    struct heap_page *page;
+    page = heap_pages_sorted[0];
 
-	if (scan > free) {
-	    gc_move(objspace, (VALUE)scan, (VALUE)free);
-	    free++;
-	    scan--;
+    free->index = 0;
+    free->page = page;
+    free->slot = page->start;
+    free->objspace = objspace;
+
+    page = heap_pages_sorted[heap_pages_sorted_length - 1];
+    scan->index = heap_pages_sorted_length - 1;
+    scan->page = page;
+    scan->slot = page->start + page->total_slots - 1;
+    scan->objspace = objspace;
+}
+
+void print_pages(int i, RVALUE *free, RVALUE *scan);
+
+static void
+gc_compact_page(rb_objspace_t *objspace)
+{
+    struct heap_cursor free_cursor;
+    struct heap_cursor scan_cursor;
+
+    init_cursors(objspace, &free_cursor, &scan_cursor);
+
+    while (not_met(&free_cursor, &scan_cursor)) {
+	while(BUILTIN_TYPE(free_cursor.slot) != T_NONE) {
+	    advance_cursor(&free_cursor);
+	}
+
+	while(!gc_is_moveable_obj(objspace, (VALUE)scan_cursor.slot, 1) && not_met(&free_cursor, &scan_cursor)) {
+	    retreat_cursor(&scan_cursor);
+	}
+
+	if (not_met(&free_cursor, &scan_cursor)) {
+	    gc_move(objspace, (VALUE)scan_cursor.slot, (VALUE)free_cursor.slot);
+	    advance_cursor(&free_cursor);
+	    retreat_cursor(&scan_cursor);
 	}
     }
-
-    // gc_print_page(objspace, page->start, pstart + page->total_slots, page);
-
 }
 
 static void
@@ -6991,11 +7074,11 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_FILE:
 	    if (any->as.file.fptr) {
 		UPDATE_IF_MOVED(objspace, any->as.file.fptr->pathv);
-		gc_moved_fixme(objspace, any->as.file.fptr->tied_io_for_writing);
-		gc_moved_fixme(objspace, any->as.file.fptr->writeconv_asciicompat);
-		gc_moved_fixme(objspace, any->as.file.fptr->writeconv_pre_ecopts);
-		gc_moved_fixme(objspace, any->as.file.fptr->encs.ecopts);
-		gc_moved_fixme(objspace, any->as.file.fptr->write_lock);
+		UPDATE_IF_MOVED(objspace, any->as.file.fptr->tied_io_for_writing);
+		UPDATE_IF_MOVED(objspace, any->as.file.fptr->writeconv_asciicompat);
+		UPDATE_IF_MOVED(objspace, any->as.file.fptr->writeconv_pre_ecopts);
+		UPDATE_IF_MOVED(objspace, any->as.file.fptr->encs.ecopts);
+		UPDATE_IF_MOVED(objspace, any->as.file.fptr->write_lock);
 	    }
 	    break;
 	case T_REGEXP:
@@ -7107,6 +7190,19 @@ rb_gc_pin_heap(VALUE mod)
     return mod;
 }
 
+void print_pages(int i, RVALUE *free, RVALUE *scan)
+{
+    struct heap_page *page;
+    rb_objspace_t *objspace = &rb_objspace;
+
+    printf("\e[H\e[2J\n");
+    for (int j = 0; j < i; j++) {
+	page = heap_pages_sorted[j];
+	gc_print_page(objspace, page->start, page->start + page->total_slots, page, free, scan);
+    }
+    printf("\n");
+    usleep(50000);
+}
 static VALUE
 rb_gc_compact(VALUE mod)
 {
@@ -7115,9 +7211,18 @@ rb_gc_compact(VALUE mod)
 
     rb_gc_pin_heap(mod);
 
+    /*
     for (int j = 0; j < heap_pages_sorted_length; j++) {
-	gc_compact_page(objspace, heap_pages_sorted[j]);
+	struct heap_page *page;
+	page = heap_pages_sorted[j];
+	gc_print_page(objspace, page->start, page->start + page->total_slots, page);
     }
+    */
+
+    gc_compact_page(objspace);
+    rb_clear_method_cache_by_class(rb_cObject);
+
+
     gc_update_references(Qnil);
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
