@@ -3268,6 +3268,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
 	break;
 
       case T_ZOMBIE:
+      case T_MOVED:
 	break;
 
       default:
@@ -6713,7 +6714,7 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 static int
 gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 {
-    if (SPECIAL_CONST_P(obj) || rb_objspace_pinned_object_p(obj)) {
+    if (SPECIAL_CONST_P(obj) || BUILTIN_TYPE(obj) == T_NONE || rb_objspace_pinned_object_p(obj)) {
 	return FALSE;
     }
 
@@ -6757,6 +6758,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 {
     int marked;
     int wb_unprotected;
+    int uncollectible;
     RVALUE *dest = (RVALUE *)free;
     RVALUE *src = (RVALUE *)scan;
     struct heap_page *from;
@@ -6764,6 +6766,7 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     marked = rb_objspace_marked_object_p((VALUE)src);
     wb_unprotected = RVALUE_WB_UNPROTECTED((VALUE)src);
+    uncollectible = RVALUE_UNCOLLECTIBLE((VALUE)src);
 
     from = GET_HEAP_PAGE((VALUE)src);
     to = GET_HEAP_PAGE((VALUE)dest);
@@ -6772,8 +6775,8 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
     CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)src), (VALUE)src);
+    CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)src), (VALUE)src);
 
-    // rb_obj_info_dump_move((VALUE)src, (VALUE)dest);
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
@@ -6789,13 +6792,10 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 	CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)dest), (VALUE)dest);
     }
 
-    if (from != to) {
-	if (from != GET_HEAP_PAGE((VALUE)src)) {
-	    printf("WTF!!!\n");
-	}
-	if (to != GET_HEAP_PAGE((VALUE)dest)) {
-	    printf("WTF!!!\n");
-	}
+    if (uncollectible) {
+	MARK_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)dest), (VALUE)dest);
+    } else {
+	CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)dest), (VALUE)dest);
     }
 
     src->as.moved.flags = T_MOVED;
@@ -6850,7 +6850,6 @@ advance_cursor(struct heap_cursor *free)
     rb_objspace_t *objspace = free->objspace;
 
     if (free->slot == free->page->start + free->page->total_slots - 1) {
-	printf("Advancing page\n");
 	free->index++;
 	free->page = heap_pages_sorted[free->index];
 	free->slot = free->page->start;
@@ -7028,9 +7027,6 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
     RVALUE *any = RANY(obj);
 
-    if (!is_markable_object(objspace, obj))
-	return;
-
     if (FL_TEST(obj, FL_EXIVAR)) {
 	rb_update_generic_ivar_references(obj);
     }
@@ -7143,21 +7139,31 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
     }
 
-    if (is_markable_object(objspace, any->as.basic.klass) && BUILTIN_TYPE(any->as.basic.klass) == T_MOVED) {
-	any->as.basic.klass = (VALUE)RMOVED(any->as.basic.klass)->destination;
-    }
+    UPDATE_IF_MOVED(objspace, RBASIC(obj)->klass);
 }
 static int
 gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 {
     rb_objspace_t * objspace;
+    struct heap_page *page;
+    short free_slots = 0;
 
     VALUE v = (VALUE)vstart;
     objspace = ((struct update_debug *)data)->objspace;
+    page = GET_HEAP_PAGE(v);
+    page->freelist = NULL;
 
     for(; v != (VALUE)vend; v += stride) {
-	gc_update_object_references(objspace, v);
+	if (SPECIAL_CONST_P(v)) {
+	} else if (BUILTIN_TYPE(v) == T_NONE) {
+	    heap_page_add_freeobj(objspace, page, v);
+	    free_slots++;
+	} else {
+	    gc_update_object_references(objspace, v);
+	}
     }
+
+    page->free_slots = free_slots;
     return 0;
 }
 
@@ -7184,8 +7190,6 @@ rb_gc_pin_heap(VALUE mod)
 
     rb_gc();
 
-    printf("incmark: %d\n", is_incremental_marking(objspace));
-    printf("incsweep: %d\n", is_lazy_sweeping(heap_eden));
     /* should only mark roots */
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
@@ -7229,11 +7233,12 @@ rb_gc_compact(VALUE mod)
     */
 
     gc_compact_page(objspace);
-    rb_clear_method_cache_by_class(rb_cObject);
-
 
     gc_update_references(Qnil);
-    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
+    gc_sweep_start(objspace);
+    gc_sweep_rest(objspace);
+
+    rb_clear_method_cache_by_class(rb_cObject);
 
     // gc_ref_update_array(ary);
     // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
