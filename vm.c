@@ -2045,12 +2045,30 @@ rb_vm_mark(void *ptr)
     if (ptr) {
 	rb_vm_t *vm = ptr;
 	rb_thread_t *th = 0;
+	long i, len;
+	const VALUE *obj_ary;
 
 	list_for_each(&vm->living_threads, th, vmlt_node) {
 	    rb_gc_mark(th->self);
 	}
 	rb_gc_mark(vm->thgroup_default);
 	rb_gc_mark(vm->mark_object_ary);
+
+	len = RARRAY_LEN(vm->mark_object_ary);
+	obj_ary = RARRAY_CONST_PTR(vm->mark_object_ary);
+	for (i=0; i < len; i++) {
+	    const VALUE *ptr;
+	    long j, jlen;
+
+	    rb_gc_mark(*obj_ary);
+	    jlen = RARRAY_LEN(*obj_ary);
+	    ptr = RARRAY_CONST_PTR(*obj_ary);
+	    for (j=0; j < jlen; j++) {
+		rb_gc_mark(*ptr++);
+	    }
+	    obj_ary++;
+	}
+
 	rb_gc_mark(vm->load_path);
 	rb_gc_mark(vm->load_path_snapshot);
 	RUBY_MARK_UNLESS_NULL(vm->load_path_check_cache);
