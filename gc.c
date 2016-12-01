@@ -6771,8 +6771,6 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     from = GET_HEAP_PAGE((VALUE)src);
     to = GET_HEAP_PAGE((VALUE)dest);
 
-    printf("move %p -> %p %s class: %p %d\n", src, dest, obj_type_name(src), rb_class_of(src), rb_type(rb_class_of(src)));
-
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
     CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)src), (VALUE)src);
     CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)src), (VALUE)src);
@@ -6955,12 +6953,6 @@ gc_ref_update_object(VALUE v, rb_objspace_t * objspace)
 	UPDATE_IF_MOVED(objspace, ptr[i]);
     }
 }
-
-struct update_debug {
-    rb_objspace_t * objspace;
-    st_table * ht;
-    VALUE obj;
-};
 
 static int
 hash_replace_ref(st_data_t *key, st_data_t *value, st_data_t argp, int existing)
@@ -7149,7 +7141,7 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
     short free_slots = 0;
 
     VALUE v = (VALUE)vstart;
-    objspace = ((struct update_debug *)data)->objspace;
+    objspace = (rb_objspace_t *)data;
     page = GET_HEAP_PAGE(v);
     page->freelist = NULL;
 
@@ -7170,11 +7162,7 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 static void
 gc_update_references(VALUE obj)
 {
-    struct update_debug blah;
-    blah.objspace = &rb_objspace;
-    blah.obj = obj;
-
-    rb_objspace_each_objects_without_setup(gc_ref_update, &blah);
+    rb_objspace_each_objects_without_setup(gc_ref_update, &rb_objspace);
 }
 
 static void
