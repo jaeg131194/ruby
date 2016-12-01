@@ -7023,9 +7023,11 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
     RVALUE *any = RANY(obj);
 
+    /*
     if (FL_TEST(obj, FL_EXIVAR)) {
 	rb_update_generic_ivar_references(obj);
     }
+    */
 
     switch(BUILTIN_TYPE(obj)) {
 	case T_CLASS:
@@ -7092,19 +7094,16 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 
 	case T_MATCH:
-	    if (gc_object_moved_p(objspace, any->as.match.regexp))
-		rb_bug("OMGFIX!!!!");
+	    UPDATE_IF_MOVED(objspace, any->as.match.regexp);
 
 	    if (any->as.match.str) {
-		if (gc_object_moved_p(objspace, any->as.match.str))
-		    rb_bug("OMGFIX!!!!");
+		UPDATE_IF_MOVED(objspace, any->as.match.str);
 	    }
 	    break;
 
 	case T_RATIONAL:
-	    rb_bug("OMGFIX!!!!");
-	    gc_mark(objspace, any->as.rational.num);
-	    gc_mark(objspace, any->as.rational.den);
+	    UPDATE_IF_MOVED(objspace, any->as.rational.num);
+	    UPDATE_IF_MOVED(objspace, any->as.rational.den);
 	    break;
 
 	case T_COMPLEX:
