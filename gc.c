@@ -6726,17 +6726,21 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_OBJECT:
 	case T_ARRAY:
 	case T_BIGNUM:
-	case T_CLASS:
 	case T_ICLASS:
 	case T_MODULE:
 	case T_REGEXP:
 	case T_DATA:
 	case T_STRING:
 	case T_SYMBOL:
+	case T_STRUCT:
 	case T_HASH:
+	case T_FILE:
+	case T_COMPLEX:
+	case T_RATIONAL:
 	    // FIXME: return false for embedded strings
 	case T_IMEMO:
 	case T_NODE:
+	case T_CLASS:
 	    break;
 	default:
 	    if(moving) {
