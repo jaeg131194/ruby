@@ -6897,8 +6897,8 @@ init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_curs
     free->slot = page->start;
     free->objspace = objspace;
 
-    page = heap_pages_sorted[heap_pages_sorted_length - 1];
-    scan->index = heap_pages_sorted_length - 1;
+    page = heap_pages_sorted[heap_allocated_pages - 1];
+    scan->index = heap_allocated_pages - 1;
     scan->page = page;
     scan->slot = page->start + page->total_slots - 1;
     scan->objspace = objspace;
