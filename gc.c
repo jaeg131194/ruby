@@ -6943,7 +6943,7 @@ gc_compact_page(rb_objspace_t *objspace)
 }
 
 static void
-gc_ref_update_array(VALUE v, rb_objspace_t * objspace)
+gc_ref_update_array(rb_objspace_t * objspace, VALUE v)
 {
     long i, len;
 
@@ -6960,7 +6960,7 @@ gc_ref_update_array(VALUE v, rb_objspace_t * objspace)
 }
 
 static void
-gc_ref_update_object(VALUE v, rb_objspace_t * objspace)
+gc_ref_update_object(rb_objspace_t * objspace, VALUE v)
 {
     uint32_t i, len = ROBJECT_NUMIV(v);
     VALUE *ptr = ROBJECT_IVPTR(v);
@@ -7012,11 +7012,8 @@ gc_update_table_refs(rb_objspace_t * objspace, st_table *ht)
 }
 
 static void
-gc_ref_update_hash(VALUE v, rb_objspace_t * objspace)
+gc_ref_update_hash(rb_objspace_t * objspace, VALUE v)
 {
-    if (FL_TEST(v, ELTS_SHARED))
-	return;
-
     gc_update_table_refs(objspace, rb_hash_tbl_raw(v));
 }
 
@@ -7064,12 +7061,12 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    if (FL_TEST(obj, ELTS_SHARED)) {
 		UPDATE_IF_MOVED(objspace, any->as.array.as.heap.aux.shared);
 	    } else {
-		gc_ref_update_array(obj, objspace);
+		gc_ref_update_array(objspace, obj);
 	    }
 	    break;
 
 	case T_HASH:
-	    gc_ref_update_hash(obj, objspace);
+	    gc_ref_update_hash(objspace, obj);
 	    UPDATE_IF_MOVED(objspace, any->as.hash.ifnone);
 	    break;
 
@@ -7082,7 +7079,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 
 	case T_OBJECT:
-	    gc_ref_update_object(obj, objspace);
+	    gc_ref_update_object(objspace, obj);
 	    break;
 
 	case T_FILE:
