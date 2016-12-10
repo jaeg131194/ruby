@@ -28,6 +28,7 @@
 #include "ruby_atomic.h"
 #include "probes.h"
 #include "id_table.h"
+#include "symbol.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <setjmp.h>
@@ -7095,9 +7096,14 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    UPDATE_IF_MOVED(objspace, any->as.regexp.src);
 	    break;
 
+	case T_SYMBOL:
+	    if (DYNAMIC_SYM_P((VALUE)any)) {
+		UPDATE_IF_MOVED(objspace, RSYMBOL(any)->fstr);
+	    }
+	    break;
+
 	case T_FLOAT:
 	case T_BIGNUM:
-	case T_SYMBOL:
 	    break;
 
 	case T_MATCH:
