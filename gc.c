@@ -6974,12 +6974,11 @@ hash_replace_ref(st_data_t *key, st_data_t *value, st_data_t argp, int existing)
 {
     rb_objspace_t *objspace;
 
-    objspace = (rb_objspace_t *)argp;
-
-    if(is_pointer_to_heap(objspace, (void *)*key) && BUILTIN_TYPE(*key) == T_MOVED) {
+    if(!SPECIAL_CONST_P((void *)*key) && BUILTIN_TYPE(*key) == T_MOVED) {
 	*key = (VALUE)RMOVED(*key)->destination;
     }
-    if(is_pointer_to_heap(objspace, (void *)*value) && BUILTIN_TYPE(*value) == T_MOVED) {
+
+    if(!SPECIAL_CONST_P((void *)*value) && BUILTIN_TYPE(*value) == T_MOVED) {
 	*value = (VALUE)RMOVED(*value)->destination;
     }
 
@@ -6993,11 +6992,11 @@ hash_foreach_replace(st_data_t key, st_data_t value, st_data_t argp, int error)
 
     objspace = (rb_objspace_t *)argp;
 
-    if(is_pointer_to_heap(objspace, (void *)key) && BUILTIN_TYPE(key) == T_MOVED) {
+    if(!SPECIAL_CONST_P((void *)key) && BUILTIN_TYPE(key) == T_MOVED) {
 	return ST_REPLACE;
     }
 
-    if(is_pointer_to_heap(objspace, (void *)value) && BUILTIN_TYPE(value) == T_MOVED) {
+    if(!SPECIAL_CONST_P((void *)value) && BUILTIN_TYPE(value) == T_MOVED) {
 	return ST_REPLACE;
     }
     return ST_CHECK;
