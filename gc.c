@@ -6719,7 +6719,7 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 }
 
 static int
-gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
+gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 {
     if (SPECIAL_CONST_P(obj) || BUILTIN_TYPE(obj) == T_NONE || rb_objspace_pinned_object_p(obj)) {
 	return FALSE;
@@ -6754,10 +6754,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj, int moving)
 	case T_CLASS:
 	    break;
 	default:
-	    if(moving) {
-		printf("moving unknown type: %d\n", BUILTIN_TYPE(obj));
-		rb_bug("WAAAT");
-	    }
+	    rb_bug("gc_is_moveable_obj: unreachable (%d)", (int)BUILTIN_TYPE(obj));
 	    break;
     }
 
@@ -6837,7 +6834,7 @@ gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct hea
 		    assert(!rb_objspace_marked_object_p(v));
 		    printf("➡️ ");
 		} else {
-		    if (gc_is_moveable_obj(objspace, v, 0)) {
+		    if (gc_is_moveable_obj(objspace, v)) {
 			printf("🙆 ");
 		    } else {
 			printf("🙅 ");
@@ -6931,7 +6928,7 @@ gc_compact_page(rb_objspace_t *objspace)
 	    advance_cursor(&free_cursor);
 	}
 
-	while(!gc_is_moveable_obj(objspace, (VALUE)scan_cursor.slot, 1) && not_met(&free_cursor, &scan_cursor)) {
+	while(!gc_is_moveable_obj(objspace, (VALUE)scan_cursor.slot) && not_met(&free_cursor, &scan_cursor)) {
 	    retreat_cursor(&scan_cursor);
 	}
 
