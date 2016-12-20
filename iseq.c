@@ -262,6 +262,9 @@ void
 rb_iseq_add_mark_object(const rb_iseq_t *iseq, VALUE obj)
 {
     /* TODO: check dedup */
+    if (!SPECIAL_CONST_P(obj)) {
+	rb_objspace_set_non_moving(obj);
+    }
     rb_ary_push(ISEQ_MARK_ARY(iseq), obj);
 }
 

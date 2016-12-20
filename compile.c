@@ -295,7 +295,7 @@ r_value(VALUE value)
     if (ls) LABEL_REF(ls);							\
     if (le) LABEL_REF(le);							\
     if (lc) LABEL_REF(lc);							\
-    rb_ary_push(ISEQ_COMPILE_DATA(iseq)->catch_table_ary, freeze_hide_obj(_e));	\
+    rb_ary_push(ISEQ_COMPILE_DATA(iseq)->catch_table_ary, rb_objspace_set_non_moving(freeze_hide_obj(_e)));	\
 } while (0)
 
 /* compile node */
@@ -538,6 +538,7 @@ static int
 iseq_add_mark_object_compile_time(const rb_iseq_t *iseq, VALUE v)
 {
     if (!SPECIAL_CONST_P(v)) {
+	rb_objspace_set_non_moving(v);
 	rb_ary_push(ISEQ_COMPILE_DATA(iseq)->mark_ary, v);
     }
     return COMPILE_OK;

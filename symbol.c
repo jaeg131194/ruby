@@ -387,6 +387,7 @@ register_sym(VALUE str, VALUE sym)
     st_update(global_symbols.str_sym, (st_data_t)str,
 	      register_sym_update_callback, (st_data_t)sym);
 #else
+    rb_objspace_set_non_moving(str);
     st_add_direct(global_symbols.str_sym, (st_data_t)str, (st_data_t)sym);
 #endif
 }
