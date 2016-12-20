@@ -7193,10 +7193,13 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
     return 0;
 }
 
+extern rb_symbols_t global_symbols;
+
 static void
 gc_update_references(VALUE obj)
 {
     rb_objspace_each_objects_without_setup(gc_ref_update, &rb_objspace);
+    gc_update_table_refs(&rb_objspace, global_symbols.str_sym);
 }
 
 static void

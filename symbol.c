@@ -59,12 +59,7 @@ enum id_entry_type {
     ID_ENTRY_SIZE
 };
 
-static struct symbols {
-    rb_id_serial_t last_id;
-    st_table *str_sym;
-    VALUE ids;
-    VALUE dsymbol_fstr_hash;
-} global_symbols = {tNEXT_ID-1};
+rb_symbols_t global_symbols = {tNEXT_ID-1};
 
 static const struct st_hash_type symhash = {
     rb_str_hash_cmp,
@@ -387,7 +382,6 @@ register_sym(VALUE str, VALUE sym)
     st_update(global_symbols.str_sym, (st_data_t)str,
 	      register_sym_update_callback, (st_data_t)sym);
 #else
-    rb_objspace_set_non_moving(str);
     st_add_direct(global_symbols.str_sym, (st_data_t)str, (st_data_t)sym);
 #endif
 }
