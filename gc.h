@@ -99,7 +99,9 @@ void rb_objspace_reachable_objects_from_root(void (func)(const char *category, V
 int rb_objspace_markable_object_p(VALUE obj);
 int rb_objspace_internal_object_p(VALUE obj);
 int rb_objspace_marked_object_p(VALUE obj);
+int rb_objspace_pinned_object_p(VALUE obj);
 int rb_objspace_garbage_object_p(VALUE obj);
+VALUE rb_objspace_set_non_moving(VALUE obj);
 
 void rb_objspace_each_objects(
     int (*callback)(void *start, void *end, size_t stride, void *data),
