@@ -112,7 +112,10 @@ rb_iseq_mark(const rb_iseq_t *iseq)
     if (iseq->body) {
 	const struct rb_iseq_constant_body *body = iseq->body;
 
-	RUBY_MARK_UNLESS_NULL(body->mark_ary);
+	if (RTEST(body->mark_ary)) {
+	    rb_gc_mark(body->mark_ary);
+	    rb_gc_mark_values(RARRAY_LEN(body->mark_ary), RARRAY_CONST_PTR(body->mark_ary));
+	}
 	rb_gc_mark(body->location.label);
 	rb_gc_mark(body->location.base_label);
 	rb_gc_mark(body->location.path);
@@ -125,9 +128,15 @@ rb_iseq_mark(const rb_iseq_t *iseq)
     }
     else if (ISEQ_COMPILE_DATA(iseq) != 0) {
 	const struct iseq_compile_data *const compile_data = ISEQ_COMPILE_DATA(iseq);
-	RUBY_MARK_UNLESS_NULL(compile_data->mark_ary);
+	if (RTEST(compile_data->mark_ary)) {
+	    rb_gc_mark(compile_data->mark_ary);
+	    rb_gc_mark_values(RARRAY_LEN(compile_data->mark_ary), RARRAY_CONST_PTR(compile_data->mark_ary));
+	}
 	RUBY_MARK_UNLESS_NULL(compile_data->err_info);
-	RUBY_MARK_UNLESS_NULL(compile_data->catch_table_ary);
+	if (RTEST(compile_data->catch_table_ary)) {
+	    rb_gc_mark(compile_data->catch_table_ary);
+	    rb_gc_mark_values(RARRAY_LEN(compile_data->catch_table_ary), RARRAY_CONST_PTR(compile_data->catch_table_ary));
+	}
     }
 
     RUBY_MARK_LEAVE("iseq");
