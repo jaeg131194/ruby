@@ -680,7 +680,6 @@ struct heap_page {
 #endif
     /* If set, the object is not movable */
     bits_t pinned_bits[HEAP_PAGE_BITMAP_LIMIT];
-    bits_t non_moving[HEAP_PAGE_BITMAP_LIMIT];
     /* the following three bitmaps are cleared at the beginning of full GC */
     bits_t mark_bits[HEAP_PAGE_BITMAP_LIMIT];
 #if USE_RGENGC
@@ -706,7 +705,6 @@ struct heap_page {
 /* getting bitmap */
 #define GET_HEAP_MARK_BITS(x)           (&GET_HEAP_PAGE(x)->mark_bits[0])
 #define GET_HEAP_PINNED_BITS(x)         (&GET_HEAP_PAGE(x)->pinned_bits[0])
-#define GET_HEAP_NON_MOVING_BITS(x)     (&GET_HEAP_PAGE(x)->non_moving[0])
 #if USE_RGENGC
 #define GET_HEAP_UNCOLLECTIBLE_BITS(x)  (&GET_HEAP_PAGE(x)->uncollectible_bits[0])
 #define GET_HEAP_WB_UNPROTECTED_BITS(x) (&GET_HEAP_PAGE(x)->wb_unprotected_bits[0])
@@ -1027,7 +1025,6 @@ tick(void)
 
 #define RVALUE_MARK_BITMAP(obj)           MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), (obj))
 #define RVALUE_PIN_BITMAP(obj)            MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), (obj))
-#define RVALUE_NON_MOVING_BITMAP(obj)     MARKED_IN_BITMAP(GET_HEAP_NON_MOVING_BITS(obj), (obj))
 #define RVALUE_PAGE_MARKED(page, obj)     MARKED_IN_BITMAP((page)->mark_bits, (obj))
 
 #if USE_RGENGC
@@ -1143,13 +1140,6 @@ RVALUE_PINNED(VALUE obj)
 {
     check_rvalue_consistency(obj);
     return RVALUE_PIN_BITMAP(obj) != 0;
-}
-
-static inline int
-RVALUE_NON_MOVING(VALUE obj)
-{
-    check_rvalue_consistency(obj);
-    return RVALUE_NON_MOVING_BITMAP(obj) != 0;
 }
 
 #if USE_RGENGC
@@ -2160,7 +2150,6 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	FL_UNSET(obj, FL_EXIVAR);
     }
 
-    if (RVALUE_NON_MOVING(obj)) CLEAR_IN_BITMAP(GET_HEAP_NON_MOVING_BITS(obj), obj);
 #if USE_RGENGC
     if (RVALUE_WB_UNPROTECTED(obj)) CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), obj);
 
@@ -4482,14 +4471,6 @@ rb_objspace_pinned_object_p(VALUE obj)
     return RVALUE_PINNED(obj) ? TRUE : FALSE;
 }
 
-VALUE
-rb_objspace_set_non_moving(VALUE obj)
-{
-    MARK_IN_BITMAP(GET_HEAP_NON_MOVING_BITS(obj), obj);
-    return obj;
-}
-
-
 static inline void
 gc_mark_set_parent(rb_objspace_t *objspace, VALUE obj)
 {
@@ -6161,7 +6142,7 @@ rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
     size_t n = 0;
     static ID ID_marked;
 #if USE_RGENGC
-    static ID ID_wb_protected, ID_old, ID_marking, ID_uncollectible, ID_pinned, ID_non_moving;
+    static ID ID_wb_protected, ID_old, ID_marking, ID_uncollectible, ID_pinned;
 #endif
 
     if (!ID_marked) {
@@ -6173,7 +6154,6 @@ rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
 	I(marking);
 	I(uncollectible);
 	I(pinned);
-	I(non_moving);
 #endif
 #undef I
     }
@@ -6186,7 +6166,6 @@ rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
 #endif
     if (MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), obj) && n<max)    flags[n++] = ID_marked;
     if (MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj) && n<max)  flags[n++] = ID_pinned;
-    if (MARKED_IN_BITMAP(GET_HEAP_NON_MOVING_BITS(obj), obj) && n<max)  flags[n++] = ID_non_moving;
     return n;
 }
 
@@ -6742,7 +6721,7 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 static int
 gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj) || BUILTIN_TYPE(obj) == T_NONE || rb_objspace_pinned_object_p(obj) || RVALUE_NON_MOVING(obj)) {
+    if (SPECIAL_CONST_P(obj) || BUILTIN_TYPE(obj) == T_NONE || rb_objspace_pinned_object_p(obj)) {
 	return FALSE;
     }
 
@@ -10050,7 +10029,6 @@ rb_gcdebug_print_obj_condition(VALUE obj)
 
     fprintf(stderr, "marked?      : %s\n", MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), obj) ? "true" : "false");
     fprintf(stderr, "pinned?      : %s\n", MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), obj) ? "true" : "false");
-    fprintf(stderr, "non_moving?  : %s\n", MARKED_IN_BITMAP(GET_HEAP_NON_MOVING_BITS(obj), obj) ? "true" : "false");
 #if USE_RGENGC
     fprintf(stderr, "age?         : %d\n", RVALUE_AGE(obj));
     fprintf(stderr, "old?         : %s\n", RVALUE_OLD_P(obj) ? "true" : "false");
