@@ -6732,10 +6732,10 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
     switch(BUILTIN_TYPE(obj)) {
 	case T_NONE:
 	case T_NIL:
-	case T_IMEMO:
 	    return FALSE;
 	    break;
 	case T_OBJECT:
+	case T_IMEMO:
 	case T_ARRAY:
 	case T_BIGNUM:
 	case T_ICLASS:
@@ -7239,10 +7239,20 @@ rb_gc_compact(VALUE mod)
     gc_compact_page(objspace);
 
     gc_update_references(Qnil);
-    gc_sweep_start(objspace);
-    gc_sweep_rest(objspace);
+    gc_mode_transition(objspace, gc_mode_sweeping);
+    gc_mode_transition(objspace, gc_mode_none);
 
     rb_clear_method_cache_by_class(rb_cObject);
+
+    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
+
+    /* Pin things found via marking */
+    gc_marks_start(objspace, TRUE);
+    gc_mark_stacked_objects_all(objspace);
+    gc_marks_finish(objspace);
+    gc_sweep_start(objspace);
+    gc_sweep_rest(objspace);
+    gc_verify_internal_consistency(Qnil);
 
     // gc_ref_update_array(ary);
     // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
