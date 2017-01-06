@@ -4495,7 +4495,7 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 	    gc_mark_and_pin_values(objspace, (long)env->env_size, env->env);
 	    VM_ENV_FLAGS_SET(env->ep, VM_ENV_FLAG_WB_REQUIRED);
 	    gc_mark_and_pin(objspace, (VALUE)rb_vm_env_prev_env(env));
-	    gc_mark_and_pin(objspace, (VALUE)env->iseq);
+	    gc_mark(objspace, (VALUE)env->iseq);
 	}
 	return;
       case imemo_cref:
@@ -7070,6 +7070,10 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
 {
     switch(imemo_type(obj)) {
 	case imemo_env:
+	    {
+		rb_env_t *env = (rb_env_t *)obj;
+		UPDATE_IF_MOVED(objspace, env->iseq);
+	    }
 	    break;
 	case imemo_cref:
 	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cref.klass);
