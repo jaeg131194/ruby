@@ -39,9 +39,9 @@ typedef struct rb_scope_visi_struct {
 
 typedef struct rb_cref_struct {
     VALUE flags;
-    const VALUE refinements;
-    const VALUE klass;
-    struct rb_cref_struct * const next;
+    VALUE refinements;
+    VALUE klass;
+    struct rb_cref_struct * next;
     const rb_scope_visibility_t scope_visi;
 } rb_cref_t;
 

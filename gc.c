@@ -4499,9 +4499,9 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 	}
 	return;
       case imemo_cref:
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.cref.klass);
-	gc_mark_and_pin(objspace, (VALUE)RANY(obj)->as.imemo.cref.next);
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.cref.refinements);
+	gc_mark(objspace, RANY(obj)->as.imemo.cref.klass);
+	gc_mark(objspace, (VALUE)RANY(obj)->as.imemo.cref.next);
+	gc_mark(objspace, RANY(obj)->as.imemo.cref.refinements);
 	return;
       case imemo_svar:
 	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.cref_or_me);
@@ -7071,6 +7071,9 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
 	case imemo_env:
 	    break;
 	case imemo_cref:
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cref.klass);
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cref.next);
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cref.refinements);
 	    break;
 	case imemo_svar:
 	    break;
