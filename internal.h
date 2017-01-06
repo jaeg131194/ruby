@@ -768,10 +768,10 @@ imemo_type(VALUE imemo)
 
 struct vm_svar {
     VALUE flags;
-    const VALUE cref_or_me;
-    const VALUE lastline;
-    const VALUE backref;
-    const VALUE others;
+    VALUE cref_or_me;
+    VALUE lastline;
+    VALUE backref;
+    VALUE others;
 };
 
 /* THROW_DATA */

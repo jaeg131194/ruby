@@ -4504,10 +4504,10 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 	gc_mark(objspace, RANY(obj)->as.imemo.cref.refinements);
 	return;
       case imemo_svar:
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.cref_or_me);
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.lastline);
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.backref);
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.svar.others);
+	gc_mark(objspace, RANY(obj)->as.imemo.svar.cref_or_me);
+	gc_mark(objspace, RANY(obj)->as.imemo.svar.lastline);
+	gc_mark(objspace, RANY(obj)->as.imemo.svar.backref);
+	gc_mark(objspace, RANY(obj)->as.imemo.svar.others);
 	return;
       case imemo_throw_data:
 	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.throw_data.throw_obj);
@@ -7076,6 +7076,10 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
 	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cref.refinements);
 	    break;
 	case imemo_svar:
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.svar.cref_or_me);
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.svar.lastline);
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.svar.backref);
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.svar.others);
 	    break;
 	case imemo_throw_data:
 	    break;
