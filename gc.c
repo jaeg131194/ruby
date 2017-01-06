@@ -4161,7 +4161,7 @@ mark_method_entry_i(VALUE me, void *data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
 
-    gc_mark_and_pin(objspace, me);
+    gc_mark(objspace, me);
     return ID_TABLE_CONTINUE;
 }
 
@@ -7112,6 +7112,34 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
     }
 }
 
+static int
+check_id_table_move(ID id, VALUE value, void *data)
+{
+    if(!SPECIAL_CONST_P((void *)value) && BUILTIN_TYPE(value) == T_MOVED) {
+	return ID_TABLE_REPLACE;
+    }
+
+    return ID_TABLE_CONTINUE;
+}
+
+static int
+update_id_table(void *key, VALUE * value, void *data)
+{
+    if(!SPECIAL_CONST_P((void *)*value) && BUILTIN_TYPE(*value) == T_MOVED) {
+	*value = (VALUE)RMOVED(*value)->destination;
+    }
+
+    return ID_TABLE_CONTINUE;
+}
+
+static void
+update_m_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
+{
+    if (tbl) {
+	rb_id_table_foreach_with_replace(tbl, check_id_table_move, update_id_table, objspace);
+    }
+}
+
 static void
 gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
@@ -7126,11 +7154,17 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
     switch(BUILTIN_TYPE(obj)) {
 	case T_CLASS:
 	case T_MODULE:
+	    update_m_tbl(objspace, RCLASS_M_TBL(obj));
 	    if (!RCLASS_EXT(obj)) break;
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
 
 	case T_ICLASS:
+	    if (FL_TEST(obj, RICLASS_IS_ORIGIN)) {
+		update_m_tbl(objspace, RCLASS_M_TBL(obj));
+	    }
+	    if (!RCLASS_EXT(obj)) break;
+	    update_m_tbl(objspace, RCLASS_CALLABLE_M_TBL(obj));
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
 

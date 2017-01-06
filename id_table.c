@@ -722,6 +722,7 @@ list_id_table_delete(struct list_id_table *tbl, ID id)
     switch (ret) {            \
       case ID_TABLE_ITERATOR_RESULT_END: \
       case ID_TABLE_CONTINUE: \
+      case ID_TABLE_REPLACE: \
       case ID_TABLE_STOP:     \
 	break;                \
       case ID_TABLE_DELETE:   \
@@ -745,6 +746,30 @@ list_id_table_foreach(struct list_id_table *tbl, rb_id_table_foreach_func_t *fun
 	const id_key_t key = keys[i];
 	enum rb_id_table_iterator_result ret = (*func)(key2id(key), values[i], data);
 	assert(key != 0);
+
+	FOREACH_LAST();
+	if (ret == ID_TABLE_STOP) return;
+    }
+}
+
+static void
+list_id_table_foreach_with_replace(struct list_id_table *tbl, rb_id_table_foreach_func_t *func, rb_id_table_update_callback_func_t *replace, void *data)
+{
+    int num = tbl->num;
+    int i;
+    const id_key_t *keys = tbl->keys;
+    VALUE *values = TABLE_VALUES(tbl);
+
+    for (i=0; i<num; i++) {
+	const id_key_t key = keys[i];
+	enum rb_id_table_iterator_result ret = (*func)(Qundef, values[i], data);
+	assert(key != 0);
+
+	if (ret == ID_TABLE_REPLACE) {
+	    VALUE val = values[i];
+	    ret = (*replace)(Qundef, &val, data, TRUE);
+	    values[i] = val;
+	}
 
 	FOREACH_LAST();
 	if (ret == ID_TABLE_STOP) return;
@@ -1134,16 +1159,17 @@ hash_foreach(sa_table *table, enum rb_id_table_iterator_result (*func)(ANYARGS),
 }
 
 static void
-hash_id_table_foreach(sa_table *table, enum rb_id_table_iterator_result (*func)(ID, VALUE, void *), void *arg)
+hash_id_table_foreach_with_replace(sa_table *table, enum rb_id_table_iterator_result (*func)(ID, VALUE, void *), rb_id_table_update_callback_func_t *replace, void *arg)
 {
     hash_foreach(table, func, arg, foreach_key_values);
 }
 
 static void
-hash_id_table_foreach_values(sa_table *table, enum rb_id_table_iterator_result (*func)(VALUE, void *), void *arg)
+hash_id_table_foreach(sa_table *table, enum rb_id_table_iterator_result (*func)(ID, VALUE, void *), void *arg)
 {
-    hash_foreach(table, func, arg, foreach_values);
+    hash_foreach(table, func, arg, foreach_key_values);
 }
+
 #endif /* ID_TABLE_USE_COALESCED_HASHING */
 
 #ifdef ID_TABLE_USE_SMALL_HASH
@@ -1288,6 +1314,17 @@ hash_table_raw_insert(struct hash_id_table *tbl, id_key_t key, VALUE val)
 }
 
 static int
+hash_update_index(struct hash_id_table *tbl, int ix, VALUE val)
+{
+    if (ix >= 0) {
+	tbl->items[ix].val = val;
+	return TRUE;
+    } else {
+	return FALSE;
+    }
+}
+
+static int
 hash_delete_index(struct hash_id_table *tbl, int ix)
 {
     if (ix >= 0) {
@@ -1389,6 +1426,29 @@ hash_id_table_delete(struct hash_id_table *tbl, ID id)
     return hash_delete_index(tbl, index);
 }
 
+static void
+hash_id_table_foreach_with_replace(struct hash_id_table *tbl, rb_id_table_foreach_func_t *func, rb_id_table_update_callback_func_t *replace, void *data)
+{
+    int i, capa = tbl->capa;
+
+    for (i=0; i<capa; i++) {
+	if (ITEM_KEY_ISSET(tbl, i)) {
+	    const id_key_t key = ITEM_GET_KEY(tbl, i);
+	    enum rb_id_table_iterator_result ret = (*func)(Qundef, tbl->items[i].val, data);
+	    assert(key != 0);
+
+	    if (ret == ID_TABLE_REPLACE) {
+		VALUE val;
+		val = tbl->items[i].val;
+		ret = (*replace)(Qundef, &val, data, TRUE);
+		hash_update_index(tbl, i, val);
+	    }
+
+	    if (ret == ID_TABLE_STOP)
+		return;
+	}
+    }
+}
 static void
 hash_id_table_foreach(struct hash_id_table *tbl, rb_id_table_foreach_func_t *func, void *data)
 {
@@ -1550,6 +1610,13 @@ mix_id_table_foreach_values(struct mix_id_table *tbl, rb_id_table_foreach_values
     else             hash_id_table_foreach_values(&tbl->aux.hash, func, data);
 }
 
+static void
+mix_id_table_foreach_with_replace(struct mix_id_table *tbl, rb_id_table_foreach_func_t *func, rb_id_table_update_callback_func_t *replace, void *data)
+{
+    if (LIST_P(tbl)) list_id_table_foreach_with_replace(&tbl->aux.list, func, replace, data);
+    else             hash_id_table_foreach_with_replace(&tbl->aux.hash, func, replace, data);
+}
+
 #endif /* ID_TABLE_USE_MIX */
 
 #define IMPL_TYPE1(type, prot, name, args) \
@@ -1578,6 +1645,9 @@ IMPL_TYPE(int, delete, (struct rb_id_table *tbl, ID id),
 IMPL_VOID(foreach,
 	  (struct rb_id_table *tbl, rb_id_table_foreach_func_t *func, void *data),
 	  (id_tbl, func, data))
+IMPL_VOID(foreach_with_replace,
+	  (struct rb_id_table *tbl, rb_id_table_foreach_func_t *func, rb_id_table_update_callback_func_t *replace, void *data),
+	  (id_tbl, func, replace, data))
 IMPL_VOID(foreach_values,
 	  (struct rb_id_table *tbl, rb_id_table_foreach_values_func_t *func, void *data),
 	  (id_tbl, func, data))
