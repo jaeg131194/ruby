@@ -6744,6 +6744,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 	case T_DATA:
 	case T_STRING:
 	case T_SYMBOL:
+	case T_MATCH:
 	case T_STRUCT:
 	case T_HASH:
 	case T_FILE:
