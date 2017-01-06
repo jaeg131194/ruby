@@ -4510,7 +4510,7 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 	gc_mark(objspace, RANY(obj)->as.imemo.svar.others);
 	return;
       case imemo_throw_data:
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.throw_data.throw_obj);
+	gc_mark(objspace, RANY(obj)->as.imemo.throw_data.throw_obj);
 	return;
       case imemo_ifunc:
 	gc_mark_maybe(objspace, (VALUE)RANY(obj)->as.imemo.ifunc.data);
@@ -7083,6 +7083,7 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
 	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.svar.others);
 	    break;
 	case imemo_throw_data:
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.throw_data.throw_obj);
 	    break;
 	case imemo_ifunc:
 	    if (is_pointer_to_heap(objspace, RANY(obj)->as.imemo.ifunc.data)) {

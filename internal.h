@@ -779,7 +779,7 @@ struct vm_svar {
 struct vm_throw_data {
     VALUE flags;
     VALUE reserved;
-    const VALUE throw_obj;
+    VALUE throw_obj;
     const struct rb_control_frame_struct *catch_frame;
     VALUE throw_state;
 };
