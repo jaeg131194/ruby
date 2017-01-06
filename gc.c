@@ -4122,28 +4122,28 @@ mark_method_entry(rb_objspace_t *objspace, const rb_method_entry_t *me)
 {
     const rb_method_definition_t *def = me->def;
 
-    gc_mark_and_pin(objspace, me->owner);
-    gc_mark_and_pin(objspace, me->defined_class);
+    gc_mark(objspace, me->owner);
+    gc_mark(objspace, me->defined_class);
 
     if (def) {
 	switch (def->type) {
 	  case VM_METHOD_TYPE_ISEQ:
-	    if (def->body.iseq.iseqptr) gc_mark_and_pin(objspace, (VALUE)def->body.iseq.iseqptr);
-	    gc_mark_and_pin(objspace, (VALUE)def->body.iseq.cref);
+	    if (def->body.iseq.iseqptr) gc_mark(objspace, (VALUE)def->body.iseq.iseqptr);
+	    gc_mark(objspace, (VALUE)def->body.iseq.cref);
 	    break;
 	  case VM_METHOD_TYPE_ATTRSET:
 	  case VM_METHOD_TYPE_IVAR:
-	    gc_mark_and_pin(objspace, def->body.attr.location);
+	    gc_mark(objspace, def->body.attr.location);
 	    break;
 	  case VM_METHOD_TYPE_BMETHOD:
-	    gc_mark_and_pin(objspace, def->body.proc);
+	    gc_mark(objspace, def->body.proc);
 	    break;
 	  case VM_METHOD_TYPE_ALIAS:
-	    gc_mark_and_pin(objspace, (VALUE)def->body.alias.original_me);
+	    gc_mark(objspace, (VALUE)def->body.alias.original_me);
 	    return;
 	  case VM_METHOD_TYPE_REFINED:
-	    gc_mark_and_pin(objspace, (VALUE)def->body.refined.orig_me);
-	    gc_mark_and_pin(objspace, (VALUE)def->body.refined.owner);
+	    gc_mark(objspace, (VALUE)def->body.refined.orig_me);
+	    gc_mark(objspace, (VALUE)def->body.refined.owner);
 	    break;
 	  case VM_METHOD_TYPE_CFUNC:
 	  case VM_METHOD_TYPE_ZSUPER:
@@ -7024,6 +7024,74 @@ gc_moved_fixme(rb_objspace_t *objspace, VALUE obj)
 }
 
 static void
+gc_ref_update_method_entry(rb_objspace_t *objspace, rb_method_entry_t *me)
+{
+    rb_method_definition_t *def = me->def;
+
+    UPDATE_IF_MOVED(objspace, me->owner);
+    UPDATE_IF_MOVED(objspace, me->defined_class);
+
+    if (def) {
+	switch (def->type) {
+	  case VM_METHOD_TYPE_ISEQ:
+	    if (def->body.iseq.iseqptr) {
+		UPDATE_IF_MOVED(objspace, def->body.iseq.iseqptr);
+	    }
+	    UPDATE_IF_MOVED(objspace, def->body.iseq.cref);
+	    break;
+	  case VM_METHOD_TYPE_ATTRSET:
+	  case VM_METHOD_TYPE_IVAR:
+	    UPDATE_IF_MOVED(objspace, def->body.attr.location);
+	    break;
+	  case VM_METHOD_TYPE_BMETHOD:
+	    UPDATE_IF_MOVED(objspace, def->body.proc);
+	    break;
+	  case VM_METHOD_TYPE_ALIAS:
+	    UPDATE_IF_MOVED(objspace, def->body.alias.original_me);
+	    return;
+	  case VM_METHOD_TYPE_REFINED:
+	    UPDATE_IF_MOVED(objspace, def->body.refined.orig_me);
+	    UPDATE_IF_MOVED(objspace, def->body.refined.owner);
+	    break;
+	  case VM_METHOD_TYPE_CFUNC:
+	  case VM_METHOD_TYPE_ZSUPER:
+	  case VM_METHOD_TYPE_MISSING:
+	  case VM_METHOD_TYPE_OPTIMIZED:
+	  case VM_METHOD_TYPE_UNDEF:
+	  case VM_METHOD_TYPE_NOTIMPLEMENTED:
+	    break;
+	}
+    }
+}
+
+static void
+gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
+{
+    switch(imemo_type(obj)) {
+	case imemo_env:
+	    break;
+	case imemo_cref:
+	    break;
+	case imemo_svar:
+	    break;
+	case imemo_throw_data:
+	    break;
+	case imemo_ifunc:
+	    break;
+	case imemo_memo:
+	    break;
+	case imemo_ment:
+	    gc_ref_update_method_entry(objspace, &RANY(obj)->as.imemo.ment);
+	    break;
+	case imemo_iseq:
+	    break;
+	default:
+	    rb_bug("not reachable");
+	    break;
+    }
+}
+
+static void
 gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
     RVALUE *any = RANY(obj);
@@ -7045,9 +7113,12 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
 
+	case T_IMEMO:
+	    gc_ref_update_imemo(objspace, obj);
+	    break;
+
 	case T_NIL:
 	case T_FIXNUM:
-	case T_IMEMO:
 	case T_NODE:
 	case T_MOVED:
 	case T_NONE:

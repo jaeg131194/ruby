@@ -49,10 +49,10 @@ typedef struct rb_cref_struct {
 
 typedef struct rb_method_entry_struct {
     VALUE flags;
-    const VALUE defined_class;
+    VALUE defined_class;
     struct rb_method_definition_struct * const def;
     ID called_id;
-    const VALUE owner;
+    VALUE owner;
 } rb_method_entry_t;
 
 typedef struct rb_callable_method_entry_struct { /* same fields with rb_method_entry_t */
@@ -120,8 +120,8 @@ typedef struct rb_iseq_struct rb_iseq_t;
 #endif
 
 typedef struct rb_method_iseq_struct {
-    const rb_iseq_t * const iseqptr;              /* should be separated from iseqval */
-    rb_cref_t * const cref;                       /* should be marked */
+    rb_iseq_t * iseqptr;              /* should be separated from iseqval */
+    rb_cref_t * cref;                       /* should be marked */
 } rb_method_iseq_t; /* check rb_add_method_iseq() when modify the fields */
 
 typedef struct rb_method_cfunc_struct {
@@ -132,16 +132,16 @@ typedef struct rb_method_cfunc_struct {
 
 typedef struct rb_method_attr_struct {
     ID id;
-    const VALUE location; /* should be marked */
+    VALUE location; /* should be marked */
 } rb_method_attr_t;
 
 typedef struct rb_method_alias_struct {
-    const struct rb_method_entry_struct * const original_me; /* original_me->klass is original owner */
+    struct rb_method_entry_struct * original_me; /* original_me->klass is original owner */
 } rb_method_alias_t;
 
 typedef struct rb_method_refined_struct {
-    const struct rb_method_entry_struct * const orig_me;
-    const VALUE owner;
+    struct rb_method_entry_struct * orig_me;
+    VALUE owner;
 } rb_method_refined_t;
 
 typedef struct rb_method_definition_struct {
@@ -156,7 +156,7 @@ typedef struct rb_method_definition_struct {
 	rb_method_alias_t alias;
 	rb_method_refined_t refined;
 
-	const VALUE proc;                 /* should be marked */
+	VALUE proc;                 /* should be marked */
 	enum method_optimized_type {
 	    OPTIMIZED_METHOD_TYPE_SEND,
 	    OPTIMIZED_METHOD_TYPE_CALL,
