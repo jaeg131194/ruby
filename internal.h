@@ -803,12 +803,12 @@ struct vm_ifunc {
 struct MEMO {
     VALUE flags;
     VALUE reserved;
-    const VALUE v1;
-    const VALUE v2;
+    VALUE v1;
+    VALUE v2;
     union {
 	long cnt;
 	long state;
-	const VALUE value;
+	VALUE value;
 	VALUE (*func)(ANYARGS);
     } u3;
 };

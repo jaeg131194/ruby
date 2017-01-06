@@ -4516,9 +4516,9 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 	gc_mark_and_pin_maybe(objspace, (VALUE)RANY(obj)->as.imemo.ifunc.data);
 	return;
       case imemo_memo:
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.memo.v1);
-	gc_mark_and_pin(objspace, RANY(obj)->as.imemo.memo.v2);
-	gc_mark_and_pin_maybe(objspace, RANY(obj)->as.imemo.memo.u3.value);
+	gc_mark(objspace, RANY(obj)->as.imemo.memo.v1);
+	gc_mark(objspace, RANY(obj)->as.imemo.memo.v2);
+	gc_mark_maybe(objspace, RANY(obj)->as.imemo.memo.u3.value);
 	return;
       case imemo_ment:
 	mark_method_entry(objspace, &RANY(obj)->as.imemo.ment);
@@ -7079,6 +7079,11 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
 	case imemo_ifunc:
 	    break;
 	case imemo_memo:
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.memo.v1);
+	    UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.memo.v2);
+	    if (is_pointer_to_heap(objspace, RANY(obj)->as.imemo.memo.u3.value)) {
+		UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.memo.u3.value);
+	    }
 	    break;
 	case imemo_ment:
 	    gc_ref_update_method_entry(objspace, &RANY(obj)->as.imemo.ment);
