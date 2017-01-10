@@ -4179,8 +4179,8 @@ mark_const_entry_i(VALUE value, void *data)
     const rb_const_entry_t *ce = (const rb_const_entry_t *)value;
     rb_objspace_t *objspace = data;
 
-    gc_mark_and_pin(objspace, ce->value);
-    gc_mark_and_pin(objspace, ce->file);
+    gc_mark(objspace, ce->value);
+    gc_mark(objspace, ce->file);
     return ID_TABLE_CONTINUE;
 }
 
@@ -6735,6 +6735,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 	    return FALSE;
 	    break;
 	case T_OBJECT:
+	case T_FLOAT:
 	case T_IMEMO:
 	case T_ARRAY:
 	case T_BIGNUM:
@@ -7140,6 +7141,29 @@ update_m_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
     }
 }
 
+static int
+update_const_table(VALUE value, void *data)
+{
+    rb_const_entry_t *ce = (rb_const_entry_t *)value;
+
+    if(!SPECIAL_CONST_P((void *)ce->value) && BUILTIN_TYPE(ce->value) == T_MOVED) {
+	ce->value = (VALUE)RMOVED(ce->value)->destination;
+    }
+
+    if(!SPECIAL_CONST_P((void *)ce->file) && BUILTIN_TYPE(ce->file) == T_MOVED) {
+	ce->file = (VALUE)RMOVED(ce->file)->destination;
+    }
+
+    return ID_TABLE_CONTINUE;
+}
+
+static void
+update_const_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
+{
+    if (!tbl) return;
+    rb_id_table_foreach_values(tbl, update_const_table, objspace);
+}
+
 static void
 gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
@@ -7156,6 +7180,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_MODULE:
 	    update_m_tbl(objspace, RCLASS_M_TBL(obj));
 	    if (!RCLASS_EXT(obj)) break;
+	    update_const_tbl(objspace, RCLASS_CONST_TBL(obj));
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
 
